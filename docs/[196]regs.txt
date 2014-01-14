@@ -1,0 +1,2531 @@
+=============================================================================
+ Anomie's Register Doc
+ $Revision: 1157 $
+ $Date: 2007-07-12 16:39:41 -0400 (Thu, 12 Jul 2007) $
+ <anomie@users.sourceforge.net>
+=============================================================================
+
+
+REGISTERS
+=========
+
+Addr rw?fvha Name
+        bits
+
+        Explanation
+
+"Addr" is the address this register is mapped into the SNES memory space.
+"Name" is the official and unofficial name of the register
+"bits" is either 8 or 16 characters explicating the bitfields in this register.
+
+The flags are:
+rw?fvha
+||||||+--> '+' if it can be read/written at any time, '-' otherwise
+|||||+---> '+' if it can be read/written during H-Blank
+||||+----> '+' if it can be read/written during V-Blank
+|||+-----> '+' if it can be read/written during force-blank
+||+------> Read/Write style: 'b'     => byte
+||                           'h'/'l' => read/write high/low byte of a word
+||                           'w'     => word read/write twice low then high
+|+-------> 'w' if the register is writable for an effect
++--------> 'r' if the register is readable for a value or effect (i.e. not
+            open bus).
+
+To find the entry for a particular register, search for the register number
+(i.e. '2100') at the very beginning of the line. Note that the DMA registers
+are combined, so e.g. to find $4300, $4310, $4320, $4330, $4340, $4350, $4360,
+or $4370 you'd search for '43x0'.
+
+For most registers (and most undefined bits of readable registers), the
+returned value is Open Bus, that is the last value read over the main bus from
+the ROM (typically part of the opcode arguments or the indirect base address).
+
+Registers matching $21x4-6 or $21x8-A (where x is 0-2) return the last value
+read from any of the PPU1 registers $2134-6, $2138-A, or $213E. This is known
+as PPU1 Open Bus. Similarly, PPU2 Open Bus involves reading registers $213B-D
+or $213F (NOT $21xB-D though).
+
+Note that it may be possible to write registers anytime even if marked '-', but
+until we have proof '-' is a better guess.
+
+--------
+
+2100  wb++++ INIDISP - Screen Display
+        x---bbbb
+
+        x    = Force blank on when set.
+        bbbb = Screen brightness, F=max, 0="off".
+
+        Note that force blank CAN be disabled mid-scanline. However, this can
+        result in glitched graphics on that scanline, as the internal rendering
+        buffers will not have been updated during force blank. Current theory
+        is that BGs will be glitched for a few tiles (depending on how far in
+        advance the PPU operates), and OBJ will be glitched for the entire
+        scanline.
+
+        Also, writing this register on the first line of V-Blank (225 or 240,
+        depending on overscan) when force blank is currently active causes the
+        OAM Address Reset to occur.
+
+
+2101  wb++?- OBSEL - Object Size and Chr Address
+        sssnnbbb
+
+        sss  = Object size:
+            000 =  8x8  and 16x16 sprites
+            001 =  8x8  and 32x32 sprites
+            010 =  8x8  and 64x64 sprites
+            011 = 16x16 and 32x32 sprites
+            100 = 16x16 and 64x64 sprites
+            101 = 32x32 and 64x64 sprites
+            110 = 16x32 and 32x64 sprites ('undocumented')
+            111 = 16x32 and 32x32 sprites ('undocumented')
+
+        nn   = Name Select
+        bbb  = Name Base Select (Addr>>14)
+            See the section "SPRITES" below for details.
+
+
+2102  wl++?- OAMADDL - OAM Address low byte
+2103  wh++?- OAMADDH - OAM Address high bit and Obj Priority
+        p------b aaaaaaaa
+
+        p    = Obj Priority activation bit
+            When this bit is set, an Obj other than Sprite 0 may be given
+            priority. See the section "SPRITES" below for details.
+
+        b aaaaaaaa = OAM address
+            This can be thought of in two ways, depending on your conception of
+            OAM. If you consider OAM as a 544-byte table, baaaaaaaa is the word
+            address into that table. If you consider OAM to be a 512-byte table
+            and a 32-byte table, b is the table selector and aaaaaaaa is the
+            word address in the table. See the section "SPRITES" below for
+            details.
+        
+        The internal OAM address is invalidated when scanlines are being
+        rendered. This invalidation is deterministic, but we do not know how
+        it is determined. Thus, the last value written to these registers is
+        reloaded into the internal OAM address at the beginning of V-Blank if
+        that occurs outside of a force-blank period. This is known as 'OAM
+        reset'. 'OAM reset' also occurs on certain writes to $2100.
+
+        Writing to either $2102 or $2103 resets the entire internal OAM Address
+        to the values last written to this register. E.g., if you set $104 to
+        this register, write 4 bytes, then write $1 to $2103, the internal OAM
+        address will point to word 4, not word 6.
+
+
+2104  wb++-- OAMDATA - Data for OAM write
+        dddddddd
+
+        Note that OAM writes are done in an odd manner, in particular
+        the low table of OAM is not affected until the high byte of a
+        word is written (however, the high table is affected
+        immediately). Thus, if you set the address, then alternate writes and
+        reads, OAM will never be affected until you reach the high table!
+
+        Similarly, if you set the address to 0, then write 1, 2, read, then
+        write 3, OAM will end up as "01 02 01 03", rather than "01 02 xx 03" as
+        you might expect.
+
+        Technically, this register CAN be written during H-blank (and probably
+        mid-scanline as well). However, due to OAM address invalidation the
+        actual OAM byte written will probably not be what you expect. Note that
+        writing during force-blank will only work as expected if that
+        force-blank was begun during V-Blank, or (probably) if $2102/3 have
+        been reset during that force-blank period.
+
+        See the section "SPRITES" below for details.
+
+
+2105  wb+++- BGMODE - BG Mode and Character Size
+        DCBAemmm
+
+        A/B/C/D = BG character size for BG1/BG2/BG3/BG4
+            If the bit is set, then the BG is made of 16x16 tiles. Otherwise,
+            8x8 tiles are used. However, note that Modes 5 and 6 always use
+            16-pixel wide tiles, and Mode 7 always uses 8x8 tiles. See the
+            section "BACKGROUNDS" below for details.
+
+        mmm  = BG Mode
+        e    = Mode 1 BG3 priority bit
+            Mode     BG depth  OPT  Priorities
+                     1 2 3 4        Front -> Back
+            -=-------=-=-=-=----=---============---
+             0       2 2 2 2    n    3AB2ab1CD0cd
+             1       4 4 2      n    3AB2ab1C 0c
+                        * if e set: C3AB2ab1  0c
+             2       4 4        y    3A 2B 1a 0b
+             3       8 4        n    3A 2B 1a 0b
+             4       8 2        y    3A 2B 1a 0b
+             5       4 2        n    3A 2B 1a 0b
+             6       4          y    3A 2  1a 0
+             7       8          n    3  2  1a 0
+             7+EXTBG 8 7        n    3  2B 1a 0b
+
+            "OPT" means "Offset-per-tile mode". For the priorities, numbers
+            mean sprites with that priority. Letters correspond to BGs (A=1,
+            B=2, etc), with upper/lower case indicating tile priority 1/0. See
+            the section "BACKGROUNDS" below for details.
+
+            Mode 7's EXTBG mode allows you to enable BG2, which uses the same
+            tilemap and character data as BG1 but interprets bit 7 of the pixel
+            data as a priority bit. BG2 also has some oddness to do with some
+            of the per-BG registers below. See the Mode 7 section under
+            BACKGROUNDS for details.
+
+
+2106  wb+++- MOSAIC - Screen Pixelation
+        xxxxDCBA
+
+        A/B/C/D = Affect BG1/BG2/BG3/BG4
+
+        xxxx = pixel size, 0=1x1, F=16x16
+            The mosaic filter goes over the BG and covers each x-by-x square
+            with the upper-left pixel of that square, with the top of the first
+            row of squares on the 'starting scanline'. If this register is set
+            during the frame, the 'starting scanline' is the current scanline,
+            otherwise it is the first visible scanline of the frame. I.e. if
+            even scanlines are completely red and odd scanlines are completely
+            blue, setting the xxxx=1 mid-frame will make the rest of the screen
+            either completely red or completely blue depending on whether you
+            set xxxx on an even or an odd scanline.
+
+            XXX: It seems that writing the same value to this register does not
+            reset the 'starting scanline', but which changes do reset it?
+
+            Note that mosaic is applied after scrolling, but before any clip
+            windows, color windows, or math. So the XxX block can be partially
+            clipped, and it can be mathed as normal with a non-mosaiced BG. But
+            scrolling can't make it partially one color and partially another.
+
+            Modes 5-6 should 'double' the expansion factor to expand
+            half-pixels. This actually makes xxxx=0 have a visible effect,
+            since the even half-pixels (usually on the subscreen) hide the odd
+            half-pixels. The same thing happens vertically with interlace mode.
+
+            Mode 7, of course, is weird. BG1 mosaics about like normal, as long
+            as you remember that the Mode 7 transformations have no effect on
+            the XxX blocks. BG2 uses bit A to control 'vertical mosaic' and bit
+            B to control 'horizontal mosaic', so you could be expanding over
+            1xX, Xx1, or XxX blocks. This can get really interesting as BG1
+            still uses bit A as normal, so you could have the BG1 pixels
+            expanded XxX with high-priority BG2 pixels expanded 1xX on top of
+            them.
+
+        See the section "BACKGROUNDS" below for details.
+
+
+2107  wb++?- BG1SC - BG1 Tilemap Address and Size
+2108  wb++?- BG2SC - BG2 Tilemap Address and Size
+2109  wb++?- BG3SC - BG3 Tilemap Address and Size
+210a  wb++?- BG4SC - BG4 Tilemap Address and Size
+        aaaaaayx
+
+        aaaaaa = Tilemap address in VRAM (Addr>>10)
+        x    = Tilemap horizontal mirroring
+        y    = Tilemap veritcal mirroring
+            All tilemaps are 32x32 tiles. If x and y are both unset, there is
+            one tilemap at Addr. If x is set, a second tilemap follows the
+            first that should be considered "to the right of" the first. If y
+            is set, a second tilemap follows the first that should be
+            considered "below" the first. If both are set, then a second
+            follows "to the right", then a third "below", and a fourth "below
+            and to the right".
+
+        See the section "BACKGROUNDS" below for more details.
+
+
+210b  wb++?- BG12NBA - BG1 and 2 Chr Address
+210c  wb++?- BG34NBA - BG3 and 4 Chr Address
+        bbbbaaaa
+
+        aaaa = Base address for BG1/3 (Addr>>13)
+        bbbb = Base address for BG2/4 (Addr>>13)
+            See the section "BACKGROUNDS" below for details.
+
+
+210d  ww+++- BG1HOFS - BG1 Horizontal Scroll
+      ww+++- M7HOFS  - Mode 7 BG Horizontal Scroll
+210e  ww+++- BG1VOFS - BG1 Vertical Scroll
+      ww+++- M7VOFS  - Mode 7 BG Vertical Scroll
+        ------xx xxxxxxxx
+        ---mmmmm mmmmmmmm
+
+        x = The BG offset, 10 bits.
+        m = The Mode 7 BG offset, 13 bits two's-complement signed.
+
+        These are actually two registers in one (or would that be "4 registers
+        in 2"?). Anyway, writing $210d will write both BG1HOFS which works
+        exactly like the rest of the BGnxOFS registers below ($210f-$2114), and
+        M7HOFS which works with the M7* registers ($211b-$2120) instead.
+
+        Modes 0-6 use BG1xOFS and ignore M7xOFS, while Mode 7 uses M7xOFS and
+        ignores BG1HOFS. See the appropriate sections below for details, and
+        note the different formulas for BG1HOFS versus M7HOFS.
+
+
+210f  ww+++- BG2HOFS - BG2 Horizontal Scroll
+2110  ww+++- BG2VOFS - BG2 Vertical Scroll
+2111  ww+++- BG3HOFS - BG3 Horizontal Scroll
+2112  ww+++- BG3VOFS - BG3 Vertical Scroll
+2113  ww+++- BG4HOFS - BG4 Horizontal Scroll
+2114  ww+++- BG4VOFS - BG4 Vertical Scroll
+        ------xx xxxxxxxx
+
+        Note that these are "write twice" registers, first the low byte is
+        written then the high. Current theory is that writes to the register
+        work like this:
+          BGnHOFS = (Current<<8) | (Prev&~7) | ((Reg>>8)&7);
+          Prev = Current;
+            or
+          BGnVOFS = (Current<<8) | Prev;
+          Prev = Current;
+
+        Note that there is only one Prev shared by all the BGnxOFS registers.
+        This is NOT shared with the M7* registers (not even M7xOFS and
+        BG1xOFS).
+
+        x = The BG offset, at most 10 bits (some modes effectively use as few
+            as 8).
+
+        Note that all BGs wrap if you try to go past their edges. Thus, the
+        maximum offset value in BG Modes 0-6 is 1023, since you have at most 64
+        tiles (if x/y of BGnSC is set) of 16 pixels each (if the appropriate
+        bit of BGMODE is set).
+
+        Horizontal scrolling scrolls in units of full pixels no matter if we're
+        rendering a 256-pixel wide screen or a 512-half-pixel wide screen.
+        However, vertical scrolling will move in half-line increments if
+        interlace mode is active.
+
+        See the section "BACKGROUNDS" below for details.
+
+
+2115  wb++?- VMAIN - Video Port Control
+        i---mmii
+
+        i    = Address increment mode:
+                0 => increment after writing $2118/reading $2139
+                1 => increment after writing $2119/reading $213a
+            Note that a word write stores low first, then high. Thus, if you're
+            storing a word value to $2118/9, you'll probably want to set 1
+            here.
+
+        ii = Address increment amount
+            00 = Normal increment by 1
+            01 = Increment by 32
+            10 = Increment by 128
+            11 = Increment by 128
+        
+        mm = Address remapping
+            00 = No remapping
+            01 = Remap addressing aaaaaaaaBBBccccc => aaaaaaaacccccBBB
+            10 = Remap addressing aaaaaaaBBBcccccc => aaaaaaaccccccBBB
+            11 = Remap addressing aaaaaaBBBccccccc => aaaaaacccccccBBB
+
+            The "remap" modes basically implement address translation. If
+            $2116/7 are set to #$0003, then word address #$0018 will be written
+            instead, and $2116/7 will be incremented to $0004.
+
+
+2116  wl++?- VMADDL - VRAM Address low byte
+2117  wh++?- VMADDH - VRAM Address high byte
+        aaaaaaaa aaaaaaaa
+
+        This sets the address for $2118/9 and $2139/a. Note that this is a word
+        address, not a byte address!
+
+        See the sections "BACKGROUNDS" and "SPRITES" below for details.
+
+
+2118  wl++-- VMDATAL - VRAM Data Write low byte
+2119  wh++-- VMDATAH - VRAM Data Write high byte
+        xxxxxxxx xxxxxxxx
+
+        This writes data to VRAM. The writes take effect immediately(?), even
+        if no increment is performed. The address is incremented when one of
+        the two bytes is written; which one depends on the setting of bit 7 of
+        register $2115. Keep in mind the address translation bits of $2115 as
+        well.
+
+        The interaction between these registers and $2139/a is unknown.
+
+        See the sections "BACKGROUNDS" and "SPRITES" below for details.
+
+
+211a  wb++?- M7SEL - Mode 7 Settings
+        rc----yx
+
+        r    = Playing field size: When clear, the playing field is 1024x1024
+            pixels (so the tilemap completely fills it). When set, the playing
+            field is much larger, and the 'empty space' fill is controlled by
+            bit 6.
+
+        c    = Empty space fill, when bit 7 is set:
+               0 = Transparent.
+               1 = Fill with character 0. Note that the fill is matrix
+                   transformed like all other Mode 7 tiles.
+        
+        x/y  = Horizontal/Veritcal mirroring. If the bit is set, flip the
+               256x256 pixel 'screen' in that direction.
+
+        See the section "BACKGROUNDS" below for details.
+
+
+211b  ww+++- M7A - Mode 7 Matrix A (also used with $2134/6)
+211c  ww+++- M7B - Mode 7 Matrix B (also used with $2134/6)
+211d  ww+++- M7C - Mode 7 Matrix C
+211e  ww+++- M7D - Mode 7 Matrix D
+        aaaaaaaa aaaaaaaa
+
+        Note that these are "write twice" registers, first the low byte is
+        written then the high. Current theory is that writes to the register
+        work like this:
+          Reg = (Current<<8) | Prev;
+          Prev = Current;
+        
+        Note that there is only one Prev shared by all these registers. This
+        Prev is NOT shared with the BGnxOFS registers, but it IS shared with
+        the M7xOFS registers.
+
+        These set the matrix parameters for Mode 7. The values are an 8-bit
+        fixed point, i.e. the value should be divided by 256.0 when used in
+        calculations. See below for more explanation.
+
+        The product A*(B>>8) may be read from registers $2134/6. There is
+        supposedly no important delay. It may not be operative during Mode 7
+        rendering.
+
+        See the section "BACKGROUNDS" below for details.
+
+
+211f  ww+++- M7X - Mode 7 Center X
+2120  ww+++- M7Y - Mode 7 Center Y
+        ---xxxxx xxxxxxxx
+
+        Note that these are "write twice" registers, like the other M7*
+        registers. See above for the write semantics. The value is 13 bit
+        two's-complement signed.
+
+        The matrix transformation formula is:
+
+        [ X ]   [ A B ]   [ SX + M7HOFS - CX ]   [ CX ]
+        [   ] = [     ] * [                  ] + [    ]
+        [ Y ]   [ C D ]   [ SY + M7VOFS - CY ]   [ CY ]
+
+        Note: SX/SY are screen coordinates. X/Y are coordinates in the playing
+        field from which the pixel is taken. If $211a bit 7 is clear, the
+        result is then restricted to 0<=X<=1023 and 0<=Y<=1023. If $211a bits 6
+        and 7 are both set and X or Y is less than 0 or greater than 1023, use
+        the low 3 bits of each to choose the pixel from character 0.
+
+        The bit-accurate formula seems to be something along the lines of:
+          #define CLIP(a) (((a)&0x2000)?((a)|~0x3ff):((a)&0x3ff))
+
+          X[0,y] = ((A*CLIP(HOFS-CX))&~63)
+                 + ((B*y)&~63) + ((B*CLIP(VOFS-CY))&~63)
+                 + (CX<<8)
+          Y[0,y] = ((C*CLIP(HOFS-CX))&~63)
+                 + ((D*y)&~63) + ((D*CLIP(VOFS-CY))&~63)
+                 + (CY<<8)
+
+          X[x,y] = X[x-1,y] + A
+          Y[x,y] = Y[x-1,y] + C
+
+        (In all cases, X[] and Y[] are fixed point with 8 bits of fraction)
+
+        See the section "BACKGROUNDS" below for details.
+
+
+2121  wb+++- CGADD - CGRAM Address
+        cccccccc
+
+        This sets the word address (i.e. color) which will be affected by $2122
+        and $213b.
+
+
+2122  ww+++- CGDATA - CGRAM Data write
+        -bbbbbgg gggrrrrr
+
+        This writes to CGRAM, effectively setting the palette colors.
+        
+        Accesses to CGRAM are handled just like accesses to the low table of
+        OAM, see $2104 for details.
+
+        Note that the color values are stored in BGR order.
+
+
+2123  wb+++- W12SEL - Window Mask Settings for BG1 and BG2
+2124  wb+++- W34SEL - Window Mask Settings for BG3 and BG4
+2125  wb+++- WOBJSEL - Window Mask Settings for OBJ and Color Window
+        ABCDabcd
+
+        c    = Enable window 1 for BG1/BG3/OBJ
+        a    = Enable window 2 for BG1/BG3/OBJ
+        C/A  = Enable window 1/2 for BG2/BG4/Color
+            When the bit is set, the corresponding window will affect the
+            corresponding background (subject to the settings of $212e/f).
+
+        d    = Window 1 Inversion for BG1/BG3/OBJ
+        b    = Window 2 Inversion for BG1/BG3/OBJ
+        D/B  = Window 1/2 Inversion for BG2/BG4/Color
+            When the bit is set, "W" should be replaced by "~W" (not-W) in the
+            window combination formulae below.
+
+        See the section "WINDOWS" below for more details.
+
+
+2126  wb+++- WH0 - Window 1 Left Position
+2127  wb+++- WH1 - Window 1 Right Position
+2128  wb+++- WH2 - Window 2 Left Position
+2129  wb+++- WH3 - Window 2 Right Position
+        xxxxxxxx
+
+        These set the offset of the appropriate edge of the appropriate window.
+        Note that if the left edge is greater than the right edge, the window
+        is considered to have no range at all (and thus "W" always is false).
+        See the section "WINDOWS" below for more details.
+
+
+212a  wb+++- WBGLOG - Window mask logic for BGs
+        44332211
+212b  wb+++- WOBJLOG - Window mask logic for OBJs and Color Window
+        ----ccoo
+
+        44/33/22/11/oo/cc = Mask logic for BG1/BG2/BG3/BG4/OBJ/Color
+            This specified the window combination method, using standard
+            boolean operators:
+              00 = OR
+              01 = AND
+              10 = XOR
+              11 = XNOR
+
+            Consider two variables, W1 and W2, which are true for pixels
+            between the appropriate left and right bounds as set in
+            $2126-$2129 and false otherwise. Then, you have the following
+            possibilities: (replace "W#" with "~W#", depending on the Inversion
+            settings of $2123-$2125)
+              Neither window enabled => nothing masked.
+              One window enabled     => Either W1 or W2, as appropriate.
+              Both windows enabled   => W1 op W2, where "op" is as above.
+            Where the function is true, the BG will be masked.
+
+        See the section "WINDOWS" below for more details.
+
+
+212c  wb+++- TM - Main Screen Designation
+212d  wb+++- TS - Subscreen Designation
+        ---o4321
+
+        1/2/3/4/o = Enable BG1/BG2/BG3/BG4/OBJ for display
+                    on the main (or sub) screen.
+
+        See the section "BACKGROUNDS" below for details.
+
+
+212e  wb+++- TMW - Window Mask Designation for the Main Screen
+212f  wb+++- TSW - Window Mask Designation for the Subscreen
+        ---o4321
+
+        1/2/3/4/o = Enable window masking for BG1/BG2/BG3/BG4/OBJ on the
+                    main (or sub) screen.
+
+        See the section "BACKGROUNDS" below for details.
+
+
+2130  wb+++- CGWSEL - Color Addition Select
+        ccmm--sd
+
+        cc = Clip colors to black before math
+            00 => Never
+            01 => Outside Color Window only
+            10 => Inside Color Window only
+            11 => Always
+
+        mm = Prevent color math
+            00 => Never
+            01 => Outside Color Window only
+            10 => Inside Color Window only
+            11 => Always	
+
+        s     = Add subscreen (instead of fixed color)
+
+        d     = Direct color mode for 256-color BGs
+
+        See the sections "BACKGROUNDS", "WINDOWS", and "RENDERING THE
+        SCREEN" below for details.
+
+
+2131  wb+++- CGADSUB - Color math designation
+        shbo4321
+
+        s    = Add/subtract select
+            0 => Add the colors
+            1 => Subtract the colors
+
+        h    = Half color math. When set, the result of the color math is
+            divided by 2 (except when $2130 bit 1 is set and the fixed color is
+            used, or when color is cliped).
+
+        4/3/2/1/o/b = Enable color math on BG1/BG2/BG3/BG4/OBJ/Backdrop
+
+        See the sections "BACKGROUNDS", "WINDOWS", and "RENDERING THE
+        SCREEN" below for details.
+
+
+2132  wb+++- COLDATA - Fixed Color Data
+        bgrccccc
+
+        b/g/r = Which color plane(s) to set the intensity for.
+        ccccc = Color intensity.
+
+        So basically, to set an orange you'd do something along the lines of:
+            LDA #$3f
+            STA $2132
+            LDA #$4f
+            STA $2132
+            LDA #$80
+            STA $2132
+
+        See the sections "BACKGROUNDS" and "WINDOWS" below for details.
+
+
+2133  wb+++- SETINI - Screen Mode/Video Select
+        se--poIi
+
+        s    = "External Sync". Used for superimposing "sfx" graphics, whatever
+            that means. Usually 0. Not much is known about this bit.
+            Interestingly, the SPPU1 chip has a pin named "EXTSYNC" (or
+            not-EXTSYNC, since it has a bar over it) which is tied to Vcc.
+
+        e    = Mode 7 EXTBG ("Extra BG"). When this bit is set, you may enable
+            BG2 on Mode 7. BG2 uses the same tile and character data as BG1,
+            but interprets the high bit of the color data as a priority for the
+            pixel.
+
+            Various sources report additional effects for this bit, possibly
+            related to bit 7. For example, "Enable the Data Supplied From the
+            External Lsi.", whatever that means. Of course, maybe that's a
+            typo and it's supposed to apply to bit 7 instead.
+
+        p    = Enable pseudo-hires mode. This creates a 512-pixel horizontal
+            resolution by taking pixels from the subscreen for the
+            even-numbered pixels (zero based) and from the main screen for the
+            odd-numbered pixels. Color math behaves just as with Mode 5/6
+            hires. The interlace bit still has no effect. Mosaic operates as
+            normal (not like Mode 5/6). The 'subscreen' pixel is clipped (by
+            windows) when the main-screen pixel to the LEFT is clipped, not
+            when the one to the RIGHT is clipped as you'd expect. What happens
+            with pixel column 0 is unknown.
+
+            Enabling this bit in Modes 5 or 6 has no effect.
+
+        o    = Overscan mode. When set, 239 lines will be displayed instead of
+            the normal 224. This also means V-Blank will occur that
+            much later, and be shorter. All that happens is that extra lines
+            get added to the display, and it seems the TV will like to move
+            the display up 8 pixels. See below for more details.
+
+        I    = OBJ Interlace. When set regardless of BG mode, the OBJ will be
+            interlaced (see bit 0 below), and thus will appear half-height.
+
+            Note that this only controls whether obj are drawn as normal or
+            not; the interlace signal is only output to the TV based on bit 0
+            below.
+
+        i    = Screen interlace. When set in BG mode 5 (and probably 6), the
+            effective screen height will be 448 (or 478) pixles, rather than
+            224 (or 239). When set in any other mode, the screen will just get
+            a bit jumpy. However, toggling the tilemap each field would
+            simulate the increased screen height (much like pseudo-hires
+            simulares hires).
+
+            In hardware, setting this bit makes the SNES output a normal
+            interlace signal rather than always forcing one frame.
+
+        See the sections "BACKGROUNDS" and "SPRITES" below for details.
+
+        Overscan: The bit only matters at the very end of the frame, if you
+        change the setting on line 0xE0 before the normal NMI trigger point
+        then it's the same as if you had it on all frame. Note that this
+        affects both the NMI trigger point and when HDMA stops for the
+        frame.
+
+        If you turn the bit off at the very beginning of scanline X (for
+        0xE1<=X<=0xF0), NMI will occur on line X and the last HDMA transfer
+        will occur on line X-1. However, on my TV at least, the display will
+        remain in the normal no-overscan position for lines E1-EC, it will
+        move up only one pixel for line ED, and it will lose vertical sync
+        for lines EF-F4!
+
+        Turning the bit on, only line E1 gives any effect: NMI will occur on
+        line E2, although the last HDMA will still occur on line E0.
+        Anything else acts like you left the bit off the whole time. Note,
+        however, that if you wait too long after the beginning of the
+        scanline then you will get no effect.
+
+        Even if there is no visible effect, the overscan setting still
+        affects VRAM writes. In particular, executing "LDA #'-' / STA $2118
+        / LDA r2133 / STA $2133 / LDA #'+' / STA $2118" during the E1-F0
+        period will write only + or only - to VRAM, depending on whether the
+        overscan bit was set to 0 or 1.
+
+        
+2134 r l+++? MPYL - Multiplication Result low byte
+2135 r m+++? MPYM - Multiplication Result middle byte
+2136 r h+++? MPYH - Multiplication Result high byte
+        xxxxxxxx xxxxxxxx xxxxxxxx
+
+        This is the 2's compliment product of the 16-bit value written to $211b
+        and the 8-bit value most recently written to $211c. There is supposedly
+        no important delay. It may not be operative during Mode 7 rendering.
+
+
+2137   b++++ SLHV - Software Latch for H/V Counter
+        --------
+
+        When read, the H/V counter (as read from $213c and $213d) will be
+        latched to the current X and Y position if bit 7 of $4201 is set. The
+        data actually read is open bus.
+
+
+2138 r w++?- OAMDATAREAD* - Data for OAM read
+        xxxxxxxx
+
+        OAM reads are straightforward: the current byte as set in $2102/3 and
+        incremented by reads from this register and writes to $2104 will be
+        returned. Note that writes to the lower table are not affected so
+        logically. See register $2104 and the section "SPRITES" below for
+        details.
+
+        Also, note that OAM address invalidation probably affects the address
+        read by this register as well.
+
+
+2139 r l++?- VMDATALREAD* - VRAM Data Read low byte
+213a r h++?- VMDATAHREAD* - VRAM Data Read high byte
+        xxxxxxxx xxxxxxxx
+
+        Simply, this reads data from VRAM. The address is incremented when
+        either $2139 or $213a is read, depending on the setting of bit 7 of
+        $2115.
+
+        Actually, the reading is more complex. When either of these registers
+        is read, the appropriate byte from a word-sized buffer is returned. A
+        word from VRAM is loaded into this buffer just *before* the VRAM
+        address is incremented. The actual data read and the amount of the
+        increment depend on the low 4 bits of $2115. The effect of this is
+        that a 'dummy read' is required after setting $2116-7 before you start
+        getting the actual data.
+
+        The interaction between these registers and $2118/9 is unknown.
+
+        See the sections "BACKGROUNDS" and "SPRITES" below for details.
+
+
+213b r w++?- CGDATAREAD* - CGRAM Data read
+        -bbbbbgg gggrrrrr
+
+        This reads from CGRAM.
+
+        Accesses to CGRAM are handled just like accesses to the low table of
+        OAM, see $2138 for details.
+
+        Note that the color values are stored in BGR order. The '-' bit is PPU2
+        Open Bus.
+
+
+213c r w++++ OPHCT - Horizontal Scanline Location
+213d r w++++ OPVCT - Vertical Scanline Location
+        -------x xxxxxxxx
+
+        These values are latched by reading $2137 when bit 7 of $4201 is set,
+        or by clearing-and-setting bit 7 of $4201 either by writing $4201 or by
+        pin 6 of Controller Port 2 (the latch occurs on the 1->0 transition).
+
+        Note that the value read is only 9 bits: bits 1-7 of the high byte are
+        PPU2 Open Bus. Each register keeps seperate track of whether to
+        return the low or high byte. The high/low selector is reset to 'low'
+        when $213f is read (the selector is NOT reset when the counter is
+        latched).
+
+        H Counter values range from 0 to 339, with 22-277 being visible on the
+        screen. V Counter values range from 0 to 261 in NTSC mode (262 is
+        possible every other frame when interlace is active) and 0 to 311 in
+        PAL mode (312 in interlace?), with 1-224 (or 1-239(?) if overscan is
+        enabled) visible on the screen.
+
+
+213e r b++++ STAT77 - PPU Status Flag and Version
+        trm-vvvv
+
+        t    = Time Over Flag. If more than 34 sprite-tiles (e.g. a 16x16
+            sprite has 2 sprite-tiles) were encountered on a single line, this
+            flag will be set. The flag is reset at the end of V-Blank. See the
+            section "SPRITES" below for details.
+
+        r    = Range Over Flag. If more than 32 sprites were encountered on a
+            single line, this flag will be set. The flag is reset at the end of
+            V-Blank. See the section "SPRITES" below for details.
+
+            Note that the above two flags are set whether or not OBJ are
+            actually enabled at the time.
+
+        m    = "Master/slave mode select". Little is known about this bit.
+            Current theory is that it indicates the status of the "MASTER" pin
+            on the S-PPU1 chip, which in the normal SNES is always Gnd. We
+            always seem to read back 0 here.
+
+        vvvv = 5c77 chip version number. So far, we've only encountered version
+            1.
+
+        The '-' bit is PPU1 Open Bus.
+
+
+213f r b++++ STAT78 - PPU Status Flag and Version
+        fl-pvvvv
+
+        f    = Interlace Field. This will toggle every V-Blank.
+
+        l    = External latch flag. When the PPU counters are latched, this
+            flag gets set. The flag is reset on read, but only when $4201 bit 7
+            is set. 
+
+        p    = NTSC/Pal Mode. If this is a PAL SNES, this bit will be set,
+            otherwise it will be clear.
+
+        vvvv = 5C78 chip version number. So far, we've encountered at least 2
+            and 3. Possibly 1 as well.
+
+        The '-' bit is PPU2 Open Bus.
+
+        Note: as a side effect of reading this register, the high/low byte
+        selector for $213c/d is reset to 'low'.
+
+
+2140 rwb++++ APUIO0 - APU I/O register 0
+2141 rwb++++ APUIO1 - APU I/O register 1
+2142 rwb++++ APUIO2 - APU I/O register 2
+2143 rwb++++ APUIO3 - APU I/O register 3
+        xxxxxxxx
+
+        These registers are used in communication with the SPC700. Note that
+        the value written here is not the value read back. Rather, the value
+        written shows up in the SPC700's registers $f4-7, and the values
+        written to those registers by the SPC700 are what you read here.
+
+        If the SPC700 writes the register during a read, the value read will
+        be the logical OR of the old and new values. The exact cycles during
+        which the 'read' actually occurs is not known, although a good guess
+        would be some portion of the final 3 master cycles of the 6-cycle
+        memory access.
+        
+        Note that these registers are mirrored throughout the range
+        $2140-$217f.
+
+
+2180 rwb++++ WMDATA - WRAM Data read/write
+        xxxxxxxx
+
+        This register reads to or writes from the WRAM address set in $2181-3.
+        The address is then incremented. The effect of mixed reads and writes
+        is unknown, but it is suspected that they are handled logically.
+
+        Note that attempting a DMA from WRAM to this register will not work,
+        WRAM will not be written. Attempting a DMA from this register to
+        WRAM will similarly not work, the value written is (initially) the Open
+        Bus value. In either case, the address in $2181-3 is not incremented.
+
+
+2181  wl++++ WMADDL - WRAM Address low byte
+2182  wm++++ WMADDM - WRAM Address middle byte
+2183  wh++++ WMADDH - WRAM Address high bit
+        -------x xxxxxxxx xxxxxxxx
+
+        This is the address that will be read or written by accesses to $2180.
+        Note that WRAM is also mapped in the SNES memory space from $7E:0000 to
+        $7F:FFFF, and from $0000 to $1FFF in banks $00 through $3F and $80
+        through $BF.
+
+        Verious docs indicate that these registers may be read as well as
+        written. However, they are wrong. These registers are open bus.
+
+        DMA from WRAM to these registers has no effect. Otherwise, however, DMA
+        writes them as normal. This means you could use DMA mode 4 to $2180 and
+        a table in ROM to write any sequence of RAM addresses.
+
+        The value does not wrap at page boundaries on increment.
+
+
+4016 rwb++++ JOYSER0 - NES-style Joypad Access Port 1
+        Rd: ------ca
+        Wr: -------l
+4017 r?b++++ JOYSER1 - NES-style Joypad Access Port 2
+        ---111db
+
+        These registers basically have a direct connection to the controller
+        ports on the front of the SNES. 
+
+        l    = Writing this bit controlls the Latch line of both controller
+            ports. When 1 is set, the Latch goes high (or is it low? At any
+            rate, whichever one makes the pads latch their state). When
+            cleared, the Latch goes the other way.
+        
+        a/b  = These bits return the state of the Data1 line.
+        c/d  = These bits return the state of the Data2 line.
+            Reading $4016 drives the Clock line of Controller Port 1 low.
+            The SNES then reads the Data1 and Data2 lines, and Clock is set
+            back to high. $4017 does the same for Port 2.
+        
+        Note the 1-bits in $4017: the CPU chip has pins for these bits, but
+        these pins are tied to Gnd and thus always 1.
+
+        Data for normal joypads is returned in the order: B, Y, Select,
+        Start, Up, Down, Left, Right, A, X, L, R, 0, 0, 0, 0, then ones
+        until latched again.
+
+        Note that Auto-Joypad Read (see register $4200) will effectively write
+        1 then 0 to bit 'l', then read 16 times from both $4016 and $4017. The
+        'a' bits will end up in $4218/9, with the first bit read (e.g. the B
+        button) in bit 15 of the word. Similarly, the 'b' bits end up in
+        $421a/b, the 'c' bits in $42c/d, and the 'd' bits in $421e/f. Any
+        further bits the device may return may be read from $4016/$4017 as
+        normal.
+
+        The effect of reading these during auto-joypad read is unknown.
+
+        See the section "CONTROLLERS" below for details.
+
+
+4200  wb+++? NMITIMEN - Interrupt Enable Flags
+        n-yx---a
+
+        n    = Enable NMI. If clear, NMI will not occur. If set, NMI will fire
+            just after the start of V-Blank.
+
+            NMI fires shortly after the V Counter reaches $E1 (or presumably
+            $F0 if overscan is enabled, see register $2133).
+
+        x/y  = IRQ enable.
+            0/0 => No IRQ will occur
+            0/1 => An IRQ will occur sometime just after the V Counter reaches
+                   the value set in $4209/a.
+            1/0 => An IRQ will occur sometime just after the H Counter reaches
+                   the value set in $4207/8.
+            1/1 => An IRQ will occur sometime just after the H Counter reaches
+                   the value set in $4207/8 when V Counter equals the value set
+                   in $4209/a.
+
+        a    = Auto-Joypad Read Enable. When set, the registers $4218-$421f
+            will be updated at about V Counter = $E3 (or presumably $F2).
+
+        Some games try to read this register. However, they work only because
+        open bus behavior gives them values they expect.
+
+        This register is initialized to $00 on power on or reset.
+
+
+4201  wb++++ WRIO - Programmable I/O port (out-port)
+        abxxxxxx
+
+        This is basically just an 8-bit I/O Port. 'b' is connected to pin 6 of
+        Controller Port 1. 'a' is connected to pin 6 of Controller Port 2, and
+        to the PPU Latch line. Thus, writing a 0 then a 1 to bit 'a' will latch
+        the H and V Counters much like reading $2137 (the latch happens on the
+        transition to 0). When bit 'a' is 0, no latching can occur.
+
+        Any other effects of this register are unknown. See $4213 for the
+        I half of the I/O Port.
+
+        Note that the IO Port is initialized as if this register were written
+        with all 1-bits at power up, unchanged on reset(?).
+
+
+4202  wb++++ WRMPYA - Multiplicand A
+4203  wb++++ WRMPYB - Multiplicand B
+        mmmmmmmm
+
+        Write $4202, then $4203. 8 "machine cycles" (probably 48 master cycles)
+        after $4203 is set, the product may be read from $4216/7. $4202 will
+        not be altered by this process, thus a new value may be written to
+        $4203 to perform another multiplication without resetting $4202.
+
+        The multiplication is unsigned.
+
+        $4202 holds the value $ff on power on and is unchanged on reset.
+
+
+4204  wl++++ WRDIVL - Dividend C low byte
+4205  wh++++ WRDIVH - Dividend C high byte
+        dddddddd dddddddd
+4206  wb++++ WRDIVB - Divisor B
+        bbbbbbbb
+
+        Write $4204/5, then $4206. 16 "machine cycles" (probably 96 master
+        cycles) after $4206 is set, the quotient may be read from $4214/5, and
+        the remainder from $4216/7. Presumably, $4204/5 are not altered by this
+        process, much like $4202.
+        
+        The division is unsigned. Division by 0 gives a quotient of $FFFF and a
+        remainder of C.
+
+        WRDIV holds the value $ffff on power on and is unchanged on reset.
+
+
+4207  wl++++ HTIMEL - H Timer low byte
+4208  wh++++ HTIMEH - H Timer high byte
+        -------h hhhhhhhh
+
+        If bit 4 of $4200 is set and bit 5 is clear, an IRQ will fire every
+        scanline when the H Counter reaches the value set here. If bits 4 and 5
+        are both set, the IRQ will fire only when the V Counter equals the
+        value set in $4209/a.
+        
+        Note that the H Counter ranges from 0 to 339, thus greater values will
+        result in no IRQ firing.
+
+        HTIME is initialized to $1ff on power on, unchanged on reset.
+
+
+4209  wl++++ VTIMEL - V Timer low byte
+420a  wh++++ VTIMEH - V Timer high byte
+        -------v vvvvvvvv
+
+        If bit 5 of $4200 is set and bit 4 is clear, an IRQ will fire just
+        after the V Counter reaches the value set here. If bits 4 and 5 are
+        both set, the IRQ will fire instead when the V Counter equals the value
+        set here and the H Counter reaches the value set in $4207/8.
+        
+        Note that the V Counter ranges from 0 to 261 in NTSC mode (262 is
+        possible every other frame whan interlace is active) and 0 to 311 in
+        PAL mode (312 in interlace?), thus greater values will result in no IRQ
+        firing.
+
+        VTIME is initialized to $1ff on power on, unchanged on reset.
+
+
+420b  wb++++ MDMAEN - DMA Enable
+        76543210
+
+        7/6/5/4/3/2/1/0 = Enable the selected DMA channels. The CPU will be
+            paused until all DMAs complete. DMAs will be executed in order from
+            0 to 7 (?).
+
+        See registers $43x0-$43xA for more details.
+
+        If HDMA (init or transfer) occurs while a DMA is in progress, the DMA
+        will be paused for the duration. If the HDMA happens to involve the
+        current DMA channel, the DMA will be immediately terminated and the
+        HDMA will progress using the then-current values of the registers.
+        Other DMA channels will be unaffected.
+
+        This register is initialized to $00 on power on or reset.
+
+        See the section "DMA AND HDMA" below for more information.
+
+
+420c  wb++++ HDMAEN - HDMA Enable
+        76543210
+
+        7/6/5/4/3/2/1/0 = Enable the selected HDMA channels. HDMAs will be
+            executed in order from 0 to 7 (?).
+
+        See registers $43x0-$43xA for more details.
+
+        If HDMA (init or transfer) occurs while a DMA is in progress, the DMA
+        will be paused for the duration. If the HDMA happens to involve the
+        current DMA channel, the DMA will be immediately terminated and the
+        HDMA will progress using the then-current values of the registers.
+        Other DMA channels will be unaffected.
+
+        Note that enabling a channel mid-frame will begin HDMA at the next HDMA
+        point. However, the HDMA register initialization only occurs before the
+        HDMA point on scanline 0, so those registers will have to be
+        initialized by hand before enabling HDMA. A channel that has already
+        terminated for the frame cannot be restarted in this manner.
+
+        Writing 0 to a bit will pause an ongoing HDMA; the transfer may be
+        continued by writing 1 to the bit.
+
+        This register is initialized to $00 on power on or reset.
+
+        See the section "DMA AND HDMA" below for more information.
+
+
+420d  wb++++ MEMSEL - ROM Access Speed
+        -------f
+
+        f    = FastROM select. The SNES uses a master clock running at
+            about 21.477 MHz (current theory is 1.89e9/88 Hz). By default, the
+            SNES takes 8 master cycles for each ROM access. If this bit is set
+            and ROM is accessed via banks $80-$FF, only 6 master cycles will be
+            used.
+
+        This register is initialized to $00 on power on (or reset?).
+
+        See my memory map and timing doc (memmap.txt) for more details.
+
+
+4210 r b++++ RDNMI - NMI Flag and 5A22 Version
+        n---vvvv
+
+        n    = NMI Flag. This bit is set at the start of V-Blank (at the
+            moment, we suspect when H-Counter is somewhere between $28 and
+            $4E), and cleared on read or at the end of V-Blank. Supposedly, it
+            is required that this register be read during NMI.
+
+            Note that this bit is not affected by bit 7 of $4200.
+
+        vvvv = 5A22 chip version number. So far, we've encountered at least 2,
+            maybe 1 as well.
+
+        NMI is cleared on power on or reset.
+
+        The '-' bits are open bus.
+
+
+4211 r b++++ TIMEUP - IRQ Flag
+        i-------
+
+        i    = IRQ Flag. This bit is set just after an IRQ fires (at the
+            moment, it seems to have the same delay as the NMI Flag of $4210
+            has following NMI), and is cleared on read or write. Supposedly, it
+            is required that this register be read during the IRQ handler. If
+            this really is the case, then I suspect that that read is what
+            actually clears the CPU's IRQ line.
+
+        This register is marked read/write in another doc, with no explanation.
+
+        IRQ is cleared on power on or reset.
+        
+        The '-' bits are open bus.
+
+
+4212 r b++++ HVBJOY - PPU Status
+        vh-----a
+
+        v    = V-Blank Flag. If we're currently in V-Blank, this flag is set,
+            otherwise it is clear. The setting seems to occur at H Counter
+            about $16-$17 when V Counter is $E1, and the clearing at about $1E
+            with V Counter 0.
+
+        h    = H-Blank Flag. If we're currently in H-Blank, this flag is set,
+            otherwise it is clear. The setting seems to occur at H Counter
+            about $121-$122, and the clearing at about $12-$18.
+
+        a    = Auto-Joypad Status. This is set while Auto-Joypad Read is in
+            progress, and cleared when complete. It typically turns on at
+            the start of V-Blank, and completes 3 scanlines later.
+
+        This register is marked read/write in another doc, with no explanation.
+
+
+4213 r b++++ RDIO - Programmable I/O port (in-port)
+        abxxxxxx
+
+        Reading this register reads data from the I/O Port. The way the
+        I/O Port works, any bit set to 0 in $4201 will be 0 here. Any bit
+        set to 1 in $4201 may be 1 or 0 here, depending on whether any other
+        device connected to the I/O Port has set a 0 to that bit.
+
+        Bit 'b' is connected to pin 6 of Controller Port 1. Bit 'a' is
+        connected to pin 6 of Controller Port 2, and to the PPU Latch line.
+
+        See register $4201 for the O side of the I/O Port.
+
+
+4214 r l++++ RDDIVL - Quotient of Divide Result low byte
+4215 r h++++ RDDIVH - Quotient of Divide Result high byte
+        qqqqqqqq qqqqqqqq
+
+        Write $4204/5, then $4206. 16 "machine cycles" (probably 96 master
+        cycles) after $4206 is set, the quotient may be read from these
+        registers, and the remainder from $4216/7.
+        
+        The division is unsigned.
+
+
+4216 r l++++ RDMPYL - Multiplication Product or Divide Remainder low byte
+4217 r h++++ RDMPYH - Multiplication Product or Divide Remainder high byte
+        xxxxxxxx xxxxxxxx
+
+        Write $4202, then $4203. 8 "machine cycles" (probably 48 master cycles)
+        after $4203 is set, the product may be read from these registers.
+
+        Write $4204/5, then $4206. 16 "machine cycles" (probably 96 master
+        cycles) after $4206 is set, the quotient may be read from $4214/5, and
+        the remainder from these registers.
+
+        The multiplication and division are both unsigned.
+
+
+4218 r l++++ JOY1L - Controller Port 1 Data1 Register low byte
+4219 r h++++ JOY1H - Controller Port 1 Data1 Register high byte
+421a r l++++ JOY2L - Controller Port 2 Data1 Register low byte
+421b r h++++ JOY2H - Controller Port 2 Data1 Register high byte
+421c r l++++ JOY3L - Controller Port 1 Data2 Register low byte
+421d r h++++ JOY3H - Controller Port 1 Data2 Register high byte
+421e r l++++ JOY4L - Controller Port 2 Data2 Register low byte
+421f r h++++ JOY4H - Controller Port 2 Data2 Register high byte
+        byetUDLR axlr0000
+
+        The bitmap above only applies for joypads, obviously. More
+        generically, Auto Joypad Read effectively sets 1 then 0 to $4016,
+        then reads $4016/7 16 times to get the bits for these registers.
+        
+        a/b/x/y/l/r/e/t = A/B/X/Y/L/R/Select/Start button status.
+
+        U/D/L/R = Up/Down/Left/Right control pad status. Note that only one of
+            L/R and only one of U/D may be set, due to the pad hardware.
+
+        These registers are only updated when the Auto-Joypad Read bit (bit 0)
+        of $4200 is set. They are being updated while the Auto-Joypad Status
+        bit (bit 0) of $4212 is set. Reading during this time will return
+        incorrect values.
+
+        See the section "CONTROLLERS" below for details.
+
+
+43x0 rwb++++ DMAPx - DMA Control for Channel x (x=0-7)
+        da-ifttt
+
+        d    = Transfer Direction. When clear, data will be read from the CPU
+            memory and written to the PPU register. When set, vice versa.
+            
+            Contrary to previous belief, this bit DOES affect HDMA! Indirect
+            mode is more useful, it will read the table as normal and write
+            from Bus B to the Bus A address specified. Direct mode will work as
+            expected though, it will read counts from the table and try to
+            write the data values into the table.
+
+        a    = HDMA Addressing Mode. When clear, the HDMA table contains the
+            data to transfar. When set, the HDMA table contains pointers to the
+            data. This bit does not affect DMA.
+
+        i    = DMA Address Increment. When clear, the DMA address will be
+            incremented for each byte. When set, the DMA address will be
+            decremented. This bit does not affect HDMA.
+
+        f    = DMA Fixed Transfer. When set, the DMA address will not be
+            adjusted. When clear, the address will be adjusted as specified by
+            bit 4. This bit does not affect HDMA.
+
+        ttt  = Transfer Mode.
+            000 => 1 register write once             (1 byte:  p               )
+            001 => 2 registers write once            (2 bytes: p, p+1          )
+            010 => 1 register write twice            (2 bytes: p, p            )
+            011 => 2 registers write twice each      (4 bytes: p, p,   p+1, p+1)
+            100 => 4 registers write once            (4 bytes: p, p+1, p+2, p+3)
+            101 => 2 registers write twice alternate (4 bytes: p, p+1, p,   p+1)
+            110 => 1 register write twice            (2 bytes: p, p            )
+            111 => 2 registers write twice each      (4 bytes: p, p,   p+1, p+1)
+
+        The effect of writing this register during HDMA to the associated
+        channel is unknown. Most likely, the change takes effect for the
+        next HDMA transfer.
+
+        This register is set to $ff on power on, and is unchanged on reset.
+
+        See the section "DMA AND HDMA" below for more information.
+
+
+43x1 rwb++++ BBADx - DMA Destination Register for Channel x (x=0-7)
+        pppppppp
+
+        This specifies the Bus B address to access. Considering the standard
+        CPU memory space, this specifies which address $00:2100-$00:21ff to
+        access, with two- and four-register modes wrapping $21ff->$2100, not
+        $2200.
+
+        The effect of writing this register during HDMA to the associated
+        channel is unknown. Most likely, the change takes effect for the
+        next transfer.
+
+        This register is set to $ff on power on, and is unchanged on reset.
+
+        See the section "DMA AND HDMA" below for more information.
+
+
+43x2 rwl++++ A1TxL - DMA Source Address for Channel x low byte (x=0-7)
+43x3 rwh++++ A1TxH - DMA Source Address for Channel x high byte (x=0-7)
+43x4 rwb++++ A1Bx - DMA Source Address for Channel x bank byte (x=0-7)
+        bbbbbbbb hhhhhhhh llllllll
+
+        This specifies the starting Address Bus A address for the DMA transfer,
+        or the beginning of the HDMA table for HDMA transfers. Note that Bus A
+        does not access the Bus B registers, so pointing this address at say
+        $00:2100 results in open bus.
+
+        The effect of writing this register during HDMA to the associated
+        channel is unknown. However, current theory is that only $43x4 will
+        affect the transfer. The changes will take effect at the next HDMA
+        init.
+
+        During DMA, $43x2/3 will be incremented or decremented as specified by
+        $43x0. However $43x4 will NOT be adjusted. These registers will not be
+        affected by HDMA.
+
+        This register is set to $ff on power on, and is unchanged on reset.
+        
+        See the section "DMA AND HDMA" below for more information.
+
+
+43x5 rwl++++ DASxL - DMA Size/HDMA Indirect Address low byte (x=0-7)
+43x6 rwh++++ DASxH - DMA Size/HDMA Indirect Address high byte (x=0-7)
+43x7 rwb++++ DASBx - HDMA Indirect Address bank byte (x=0-7)
+        bbbbbbbb hhhhhhhh llllllll
+
+        For DMA, $43x5/6 indicate the number of bytes to transfer. Note that
+        this is a strict limit: if this is set to 1 then only 1 byte will be
+        written, even if the transfer mode specifies 2 or 4 registers (and if
+        this is 5, all 4 registers would be written once, then the first only
+        would be written a second time). Note, however, that writing $0000 to
+        this register actually results in a transfer of $10000 bytes, not 0.
+
+        $43x5/6 are decremented during DMA, and thus typically end up set to 0
+        when DMA is complete.
+
+        For HDMA, $43x7 specifies the bank for indirect addressing mode. The
+        indirect address is copied into $43x5/6 and incremented appropriately.
+        For direct HDMA, these registers are not used or altered.
+
+        Writes to $43x7 during indirect HDMA will take effect for the next
+        transfer. Writes to $43x5/6 during indirect HDMA will also take effect
+        for the next HDMA transfer, however this is only noticable during
+        repeat mode (for normal mode, a new indirect address will be read from
+        the table before the transfer). For a direct transfer, presumably
+        nothing will happen.
+
+        This register is set to $ff on power on, and is unchanged on reset.
+
+        See the section "DMA AND HDMA" below for more information.
+
+
+43x8 rwl++++ A2AxL - HDMA Table Address low byte (x=0-7)
+43x9 rwh++++ A2AxH - HDMA Table Address high byte (x=0-7)
+        aaaaaaaa aaaaaaaa
+
+        At the beginning of the frame $43x2/3 are copied into this register for
+        all active HDMA channels, and then this register is updated as the
+        table is read. Thus, if a game wishes to start HDMA mid-frame (or
+        change tables mid-frame), this register must be written. Writing this
+        register mid-frame changes the table address for the next scanline.
+
+        This register is not used for DMA.
+
+        This register is set to $ff on power on, and is unchanged on reset.
+
+        See the section "DMA AND HDMA" below for more information.
+
+
+43xa rwb++++ NLTRx - HDMA Line Counter (x=0-7)
+        rccccccc
+
+        r    = Repeat Select. When set, the HDMA transfer will be performed
+            every line, rather than only when this register is loaded from the
+            table. However, this byte (and the indirect HDMA address) will only
+            be reloaded from the table when the counter reaches 0.
+
+        ccccccc = Line count. This is decremented every scanline. When it
+            reaches 0, a byte is read from the HDMA table into this register
+            (and the indirect HDMA address is read into $43x5/6 if applicable).
+
+        One oddity: the register is decremeted before being checked for r
+        status or c==0. Thus, setting a value of $80 is really "128 lines with
+        no repeat" rather than "0 lines with repeat". Similarly, a value of $00
+        will be "128 lines with repeat" when it doesn't mean "terminate the
+        channel".
+
+        This register is initialized at the end of V-Blank for every active
+        HDMA channel. Note that if a game wishes to begin HDMA during the
+        frame, it will most likely have to initalize this register. Writing
+        this mid-transfer will similarly change the count and repeat to take
+        effect next scanline. Remember though that 'repeat' won't take effect
+        until after the next transfer period.
+
+        This register is set to $ff on power on, and is unchanged on reset.
+
+        See the section "DMA AND HDMA" below for more information.
+
+43xb rwb++++ ????x - Unknown (x=0-7)
+43xf rwb++++ ????x - Unknown (x=0-7)
+        ????????
+
+        The effects of these registers (if any) are unknown. $43xf and $43xb
+        are really aliases for the same register.
+
+        This register is set to $ff on power on, and is unchanged on reset.
+
+
+
+SPRITES
+=======
+
+The SNES has 128 independant sprites. The sprite definitions are stored in
+Object Attribute Memory, or OAM.
+
+OAM
+---
+
+OAM consists of 544 bytes, organized into a low table of 512 bytes and a high
+table of 32 bytes. Both tables are made up of 128 records. OAM is accessed by
+setting the word address in register $2102, the "table select" in bit 0 of
+$2103, then writing to $2104 or reading from $2138. Since the high table is
+only 32 bytes long, only the low 4 bits of $2102 are significant for indexing
+this table.
+
+The internal OAM address is invalidated during the rendering of a scanline;
+this invalidation is deterministic, but we do not know how or when the value is
+determined. Current theory is that it is invalidated more-or-less continuously
+and has something to do with the current OAM address and possibly which sprites
+are on the current scanline. The internal OAM address is reloaded from $2102/3
+at the beginning of V-Blank, if this occurs outside of a force-blank period.
+The reload also occurs on a 1->0 transition of $2100.7.
+
+Each read/write increments the address by one byte (the internal address has 10
+bits, with bit 9 selecting the table and bits 0-8 indexing). Reads simply read
+the current byte. Writes to the low table go into a word-sized buffer, which is
+written to the appropriate word of OAM when the high byte of the word is
+written. Thus, if alternating reads and writes occur such that the high byte of
+the word is always read instead of written, none of the writes will actually
+affect OAM. If the alternation happens such that the writes always occur to the
+high byte, not only the high bytes but whatever garbage is left in the low byte
+will be written as well!
+
+Pictorally: Start OAM filled with all zeros. Write 1, read, read, Write 2,
+read, write 3 => OAM is 00 00 01 02 01 03, rather than 01 00 00 02 00 03 as
+you might expect.
+
+Writes to the high table, on the other hand, work exactly as expected.
+
+The record format for the low table is 4 bytes:
+  byte OBJ*4+0: xxxxxxxx
+  byte OBJ*4+1: yyyyyyyy
+  byte OBJ*4+2: cccccccc
+  byte OBJ*4+3: vhoopppN
+
+The record format for the high table is 2 bits:
+  bit 0/2/4/6 of byte OBJ/4: X
+  bit 1/3/5/7 of byte OBJ/4: s
+
+The values are:
+  Xxxxxxxxx = X position of the sprite. Basically, consider this signed but see
+      below.
+  yyyyyyyy  = Y position of the sprite. Values 0-239 are on-screen. -63 through
+      -1 are "off the top", so the bottom part of the sprite comes in at the
+      top of the screen. Note that this implies a really big sprite can go off
+      the bottom and come back in the top.
+  cccccccc  = First tile of the sprite. See below for the calculation of the
+      VRAM address. Note that this could also be considered as 'rrrrcccc'
+      specifying the row and column of the tile in the 16x16 character table.
+  N         = Name table of the sprite. See below for the calculation of the
+      VRAM address.
+  ppp       = Palette of the sprite. The first palette index is 128+ppp*16.
+  oo        = Sprite priority. See below for details.
+  h/v       = Horizontal/Veritcal flip flags. Note this flips the whole sprite,
+      not just the individual tiles. However, the rectangular sprites are
+      flipped vertically as if they were two square sprites (i.e. rows
+      "01234567" flip to "32107654", not "76543210").
+  s         = Sprite size flag. See below for details.
+
+The sprite size is controlled by bits 5-7 of $2101, and the Size bit of OAM.
+$2101 determines the two possible sizes for all sprites. If the OAM Size flag
+is 0, the sprite uses the smaller size, otherwise it uses the larger size.
+
+
+Palettes
+--------
+
+There are 8 16-color palettes available to sprites, starting at CGRAM index
+128. Thus, the palette number 'ppp' in OAM indicates that colors 128+ppp*16
+through 128+ppp*16+15 are available to this sprite. However, the first of these
+is always considered transparent, to allow for non-rectangular shaped sprites.
+
+Only sprites with palettes 4-7 participate in color math.
+
+
+Character table in VRAM
+-----------------------
+
+Sprites have two 16x16 tile character tables in VRAM. Wrapping on these works
+much like for BG tilemaps: tile 0 is to the right of tile $0F and below tile
+$F0, tile $10 is below tile 0 and to the right of tile $1F, tile $FF is to the
+left of tile $F0 and above tile $0F, and so on. Which character table a sprite
+uses is determined by the N bit in OAM. So if you specify Tile=$ff, your 16x16
+sprite is made of tiles $ff, $f0, $0f, and $00.
+
+The first table is at the address specified by the Name Base bits of $2101, and
+the offset of the second is determined by the Name bits of $2101. The word
+address in VRAM of a sprite's first tile may be calculated as:
+  ((Base<<13) + (cccccccc<<4) + (N ? ((Name+1)<<12) : 0)) & 0x7fff
+
+See the section "BACKGROUNDS" below for details on the format of the character
+data.
+
+
+Sprite Priority
+---------------
+
+There are two 'priority' concepts applicalbe to sprites. First, there are
+the priority bits in OAM, which control the priority of the sprites relative
+to the BGs. See the section "BACKGROUNDS" for more details on this.
+
+The second is the priority with relation to the other sprites. This is
+completely controlled by the sprite's index and the priority rotation
+setting.
+
+Priority rotation is set by bit 7 of $2103. If the bit is unset, Sprite 0 is
+always the first sprite. Otherwise, take the current internal OAM word
+address (not affected by OAM Address Invalidation) and give priority to the
+sprite number (OAMAddr&0xFE)>>1. So if you set $2102/3 to $104, then write 4
+bytes, sprite 3 will have priority for the next frame. However, OAM Address
+Reset will reset the internal OAM address to word $104, so sprite 2 will
+have priority for subsequent frames.
+
+There is one major oddity: if you set $2102/3=A, then write 4n+2*(A&1)+1
+bytes (e.g. so the next byte written would go to the last byte in the 4-byte
+sprite record), sprite ((OAMAddr>>1)+Y)&0x7F has priority (where Y is the
+current line as addressed by sprites). Thus, if you put all 128 8x8 sprites
+at Y=63, write $8000 to $2102/3, then read 3 bytes from $2138, you will see
+sprites 63-70 having priority on successive scanlines.
+
+FirstSprite ends up on top of all other sprites, regardless of the priority
+bits in OAM. FirstSprite+1 is on top of FirstSprite+2 is on top of
+FirstSprite+3 and so on until FirstSprite+127 (wrapping of course from sprite
+127 to sprite 0). Note that only the priority of the topmost sprite is
+considered relative to the backgrounds. Thus, if FirstSprite+3 and
+FirstSprite+4 are identical except FirstSprite+3 has priority 0 and
+FirstSprite+4 has priority 3, they will both be hidden by any backgrounds that
+hide priority 0 sprites. This may seem counterintuitive, since FirstSprite+4
+would normally go in front of these BGs, but many games depend on this
+behavior.
+
+
+Drawing the Sprites
+-------------------
+
+As with everything else on the SNES, sprites are drawn per-scanline. The
+process is basically as follows:
+
+ 0) If any OBJ is at X=256 (or X=-256, same difference), consider it as being
+    at X=0 when considering Range and Time. Note that this doesn't mean you
+    actually draw it at X=0.
+
+ 1) Range: Starting with the FirstSprite, determine the first 32 sprites on
+    this scanline. Only those sprites with -size < X < 256 are considered in
+    Range. If there are more than 32 sprites on the scanline, set bit 6 of
+    register $213e.
+
+ 2) Time: Starting with the last sprite in Range, load up to 34 8x8 tiles (from
+    left-to-right, after flipping). If there are more than 34 tiles in Range,
+    set bit 7 of $213e. Only those tiles with -8 < X < 256 are counted.
+ 
+ 3) Associate with each tile in Range and Time its true X position (256/-256
+    should not be set to 0), palette, and priority for drawing.
+
+See the section "RENDERING THE SCREEN" below for details.
+
+
+BACKGROUNDS
+===========
+
+BG Modes
+--------
+
+The SNES has 7 background modes, two of which have major variations. The modes
+are selected by bits 0-2 of register $2105. The variation of Mode 1 is selected
+by bit 3 of $2105, and the variation of Mode 7 is selected by bit 6 of $2133.
+
+Mode    # Colors for BG
+         1   2   3   4
+======---=---=---=---=
+0        4   4   4   4
+1       16  16   4   -
+2       16  16   -   -
+3      256  16   -   -
+4      256   4   -   -
+5       16   4   -   -
+6       16   -   -   -
+7      256   -   -   -
+7EXTBG 256 128   -   -
+
+In all modes and for all BGs, color 0 in any palette is considered transparent.
+
+
+Tile Maps and Character Maps
+----------------------------
+
+Each BG has two regions of VRAM associated with it: one for the tilemap, and
+one for the character data.
+
+The tilemap address is selected by bits 2-7 of registers $2107-a, and the
+tilemap size is selected by bits 0-1 of that same register. All tilemaps are
+32x32, bits 0-1 simply select the number of 32x32 tilemaps and how they're
+layed out in memory:
+  00  32x32   AA
+              AA
+  01  64x32   AB
+              AB
+  10  32x64   AA
+              BB
+  11  64x64   AB
+              CD
+Starting at the tilemap address, the first $800 bytes are for tilemap A. Then
+come the $800 bytes for B, then C then D. Of course, if only A is required
+something else could be stuck in the empty space.
+
+Each entry in the tilemap is 2 bytes, formatted as (high low):
+  vhopppcc cccccccc
+
+  v/h  = Vertical/Horizontal flip this tile.
+  o    = Tile priority.
+  ppp  = Tile palette. The number of entries in the palette depends on the Mode
+      and the BG.
+  cccccccccc = Tile number.
+
+To find the tilemap word address for a particular tile (X and Y), you'd use a
+formula something like this:
+  (Addr<<9) + ((Y&0x1f)<<5) + (X&0x1f) + 
+     (SY ? ((Y&0x20)<<(SX ? 6 : 5)) : 0) + (SX ? ((X&0x20)<<5) : 0)
+
+The tile character data is stored at the address pointed to by registers
+$210b-c, starting at byte address:
+  (Base<<13) + (TileNumber * 8*NumBitplanes)
+Each tile is (normally) 8x8 pixels. The data is stored in bitplanes.
+Each row of the tile fills 1 byte, with the leftmost pixel being in bit 7. For
+4-color tiles, bitplanes 0 and 1 are stored in the low and high bytes of a
+word, with 8 words making up the tile. For a 16-color tile, bitplanes 0 and 1
+are stored as for a 4-color tile, followed by bitplanes 2 and 3 in the same
+format. A 256-color tile is stored in the same way as 2 4-color tiles.
+
+If the appropriate bit of $2105 is set, each "tile" of the tilemap actually
+corresponds to a 16x16 pixel block consisting of Tile, Tile+1, Tile+16, and
+Tile+17. In this case, the 32x32 tile tilemap codes for a 512x512 pixel screen
+rather than a 256x256 pixel screen as normal. Thus, using both 16x16 tiles and
+the 64x64 tilemap each BG can be up to 1024x1024 pixels. There is no wrapping
+like there is for 16x16 sprites: if you specify Tile=$2ff, you'll get $2ff,
+$300, $30f, and $310 (as opposed to $2ff, $2f0, $20f, and $200 you might
+otherwise expect). $3ff goes to $000, of course. Flipping in this mode flips th
+whole 16x16 tile, not just the individual 8x8 tiles.
+
+
+BG Scrolling
+------------
+
+Of course, depending on the BG mode and the interlace setting, Modes 0-6 have
+an actual display of 256x224 or 256x239 pixels. The BG scroll registers
+$210d-$2114 control the offset of the displayed area within that possible
+256x256 to 1024x1024 pixel BG.
+
+The display can never fall outside the BG: if that would seem to be the case,
+simply wrap around back to 0 (or 'tile' the BG to fill the full 1024x1024,
+however you like to think of it).
+
+The registers $210d-$2114 are all write-twice to set the 16-bit value. The way
+this works, the last write to any of these registers is stored in a buffer.
+When a new byte is written to any register, the current register value, the
+previous byte written to any of the 6 registers, and the new byte written
+are combined as follows:
+  For BGnHOFS: (NewByte<<8) | (PrevByte&~7) | ((CurrentValue>>8)&7)
+  For BGnVOFS: (NewByte<<8) | PrevByte
+For the most part, the details don't really matter as most games always write
+two bytes to one of these registers. However, some games write only one byte,
+or they do other odd things.
+
+Thus, the tilemap entry for a particular X and Y position on the screen may be
+calculated as follows:
+  Size = 8 or 16 depending on the appropriate bit of $2105
+  TileX = (X + BGnHOFS)/Size
+  TileY = (Y + BGnVOFS)/Size
+  Look up the tile at TileX and TileY as described above.
+
+Note that many games will set their vertical scroll values to -1 rather than 0.
+This is bacause the SNES loads OBJ data for each scanline during the previous
+scanline. The very first line, though, wouldn't have any OBJ data loaded! So
+the SNES doesn't actually output scanline 0, although it does everything to
+render it. These games want the first line of their tilemap to be the first
+line output, so they set their VOFS registers in this manner. Note that an
+interlace screen needs -2 rather than -1 to properly correct for the missing
+line 0 (and an emulator would need to add 2 instead of 1 to account for this).
+
+
+Direct Color Mode
+-----------------
+
+For the 256-color BGs of Modes 3, 4, and 7, $2130 bit 0 when set enables direct
+color mode. In this mode, instead of ignoring ppp and using the character data
+as the palette index, you treat the character data as expressing a color
+BBGGGRRR, and use the 3 bits of ppp as bgr to make the color
+  Red=RRRr0, Green=GGGg0, Blue=BBb00
+
+In direct color mode you cannot have a black pixel, since any pixel with
+character data = 0 is still considered transparent. Use one of the almost-black
+colors instead (01, 08 or 09 are good choices).
+
+
+Mode 0
+------
+
+In Mode 0, you have 4 BGs of 4 colors each. To calculate the starting palette
+entry for a particular tile, you calculate:
+  ppp*4 + (BG#-1)*32
+
+The background priority is (from 'front' to 'back'):
+  Sprites with priority 3
+  BG1 tiles with priority 1
+  BG2 tiles with priority 1
+  Sprites with priority 2
+  BG1 tiles with priority 0
+  BG2 tiles with priority 0
+  Sprites with priority 1
+  BG3 tiles with priority 1
+  BG4 tiles with priority 1
+  Sprites with priority 0
+  BG3 tiles with priority 0
+  BG4 tiles with priority 0
+
+
+Mode 1
+------
+
+In Mode 1, you have 2 BGs of 16 colors and 1 BG of 4 colors. To calculate the
+starting palette entry, calculate:
+  ppp*ncolors
+
+The background priority varies depending on the setting of bit 3 of $2105.
+The priority is (from 'front' to 'back'):
+  BG3 tiles with priority 1 if bit 3 of $2105 is set
+  Sprites with priority 3
+  BG1 tiles with priority 1
+  BG2 tiles with priority 1
+  Sprites with priority 2
+  BG1 tiles with priority 0
+  BG2 tiles with priority 0
+  Sprites with priority 1
+  BG3 tiles with priority 1 if bit 3 of $2105 is clear
+  Sprites with priority 0
+  BG3 tiles with priority 0
+
+
+Mode 2
+------
+
+In Mode 2, you have 2 BGs of 16 colors each. To calculate the starting palette
+index, calculate:
+  ppp*16
+
+The priority is (from 'front' to 'back'):
+  Sprites with priority 3
+  BG1 tiles with priority 1
+  Sprites with priority 2
+  BG2 tiles with priority 1
+  Sprites with priority 1
+  BG1 tiles with priority 0
+  Sprites with priority 0
+  BG2 tiles with priority 0
+
+Note the change from Modes 0 and 1.
+
+Mode 2 is the first of the Offset-Per-Tile Modes. In this mode, the 'tile
+data' for BG3 actually encodes a (possible) replacement HOffset and/or
+VOffset value for each tile of BG1 and/or BG2.
+
+Consider a visible scanline. Normally, you'd get the pixels something like
+this:
+
+  HOFS = X + BGnHOFS
+  VOFS = Y + BGnVOFS
+  Pixel[X,Y] = GetPixel(GetTile(BGn, HOFS, VOFS), HOFS, VOFS)
+
+With offset-per-tile, the formula is a little more complicated:
+  
+  HOFS = X + BGnHOFS
+  VOFS = Y + BGnVOFS
+  ValidBit = 0x2000 for BG1, or 0x4000 for BG2
+  if (!IsFirst8x8Tile(BGn, HOFS)) {
+    /* Hopefully these calculations are right... */
+    Hval = GetTile(BG3, (HOFS&7)|(((X-8)&~7)+(BG3HOFS&~7)), BG3VOFS)
+    Vval = GetTile(BG3, (HOFS&7)|(((X-8)&~7)+(BG3HOFS&~7)), BG3VOFS + 8)
+    if (Hval&ValidBit) HOFS = (HOFS&7) | ((X&~7) + (Hval&~7))
+    if (Vval&ValidBit) VOFS = Y + Vval
+  }
+  Pixel[X,Y] = GetPixel(Get8x8Tile(BGn, HOFS, VOFS), HOFS, VOFS)
+
+In other words, number the visible tiles in BGn from 0-32, and the 'visible'
+tiles in BG3 the same way. BGn tile 0 is offset as normal, then for 1<=T<33
+BGn tile T gets the offset data from BG3 tile T-1. It doesn't matter whether
+or not the tiles actually align in any way.
+
+Note that the leftmost visible tile is done as normal in all cases (although
+as little as 1 pixel may be visible, and if that still bothers you then use
+a clip window to hide it), and the next tile uses the tilemap entry for what
+would be BG3's leftmost tile. Note also that the 'new' offset completely
+overrides the BGnVOFS register, but the lower 3 bits of the BGnHOFS offset
+are still used. And note that the current Y position on the screen does not
+affect which row of the BG3 tilemap to reference, it's as if Y were always 0.
+
+On the other hand, note that even if BGn is 16x16 tiles, BG3 can specify the
+offset for each 8x8 subtile. And if BG3 is 16x16, the offsets will apply to
+all the corresponding 8x8 subtiles on BGn. Also note that if BG3 is 16x16, we
+may end up using the same tile for Hval and Vval.
+
+
+Mode 3
+------
+
+In Mode 3, you have one 256-color BG and one 16-color BG. To calculate the
+starting palette index, calculate:
+  BG1: 0
+  BG2: ppp*16
+
+The priority is (from 'front' to 'back'):
+  Sprites with priority 3
+  BG1 tiles with priority 1
+  Sprites with priority 2
+  BG2 tiles with priority 1
+  Sprites with priority 1
+  BG1 tiles with priority 0
+  Sprites with priority 0
+  BG2 tiles with priority 0
+
+Note that register $2130 may enable Direct Color Mode on BG1.
+
+
+Mode 4
+------
+
+In Mode 4, you have one 256-color BG and one 4-color BG. To calculate the
+starting palette index, calculate:
+  BG1: 0
+  BG2: ppp*4
+
+The priority is (from 'front' to 'back'):
+  Sprites with priority 3
+  BG1 tiles with priority 1
+  Sprites with priority 2
+  BG2 tiles with priority 1
+  Sprites with priority 1
+  BG1 tiles with priority 0
+  Sprites with priority 0
+  BG2 tiles with priority 0
+
+Note that register $2130 may enable Direct Color Mode on BG1.
+
+Mode 4 is the second of the Offset-Per-Tile Modes. It operates much like
+Mode 2, however the SNES doesn't have time to load two offset values.
+Instead, it does this:
+    Val = GetTile(BG3, ...)
+    if (Val&0x8000) {
+      Hval = 0
+      Vval = Val
+    } else {
+      Hval = Val
+      Vval = 0
+    }
+
+
+Mode 5
+------
+
+In Mode 5, you have one 16-color BG and one 4-color BG. To calculate the
+starting palette index, calculate:
+  ppp*ncolors
+
+The priority is (from 'front' to 'back'):
+  Sprites with priority 3
+  BG1 tiles with priority 1
+  Sprites with priority 2
+  BG2 tiles with priority 1
+  Sprites with priority 1
+  BG1 tiles with priority 0
+  Sprites with priority 0
+  BG2 tiles with priority 0
+
+Mode 5 is rather different from the previous modes. Instead of using an 8/16
+pixel wide tile as normal, it always takes a 16 pixel wide tile (the height
+may still be 8 or 16) and only uses half the pixels (zero-based, the even
+pixels for subscreen tiles and the odd pixels for mainscreen tiles). Then it
+forces pseudo-hires on to render a 512-pixel wide scanline. Also, if
+Interlace mode is on (see bit 0 of $2133), the screen is 448 or 478
+half-lines high instead of 224 or 239. Either the odd half-lines or the even
+half-lines are drawn each frame, as indicated by bit 7 of $213f.
+
+Note that this means you must set $212c and $212d to the same value to get the
+'expected' display.
+
+
+Mode 6
+------
+
+In Mode 6, you have only one 16-color BG. To calculate the starting palette
+index, calculate:
+  ppp*ncolors
+
+The priority is (from 'front' to 'back'):
+  Sprites with priority 3
+  BG1 tiles with priority 1
+  Sprites with priority 2
+  Sprites with priority 1
+  BG1 tiles with priority 0
+  Sprites with priority 0
+
+Mode 6 has the same oddities as Mode 5. In addition, it is an offset per tile
+mode! That part works just like as Mode 2. However, remember that Mode 6 always
+uses 8 pixel (16 half-pixel) wide tiles, this applies to BG3 as well as BG1.
+You can't apply the offset to an 8-half-pixel tile nor to a 16-pixel wide area
+(except by using two offset values for the two 8-pixel areas).
+
+
+Mode 7
+------
+
+Mode 7 is extremely different from all the modes before. You have one BG of 256
+colors. However, the tilemap and character map are laid out completely
+differently.
+
+The tilemap and charactermap are interleaved, with the character data being in
+the high byte of each word and the tilemap data being in the low byte (note
+that in hardware, VRAM is set up such that odd bytes are in one RAM chip and
+even in another, and each RAM chip has a separate address bus. The Mode 7
+renderer probably accesses the two chips independantly). The tilemap is 128x128
+entries of one byte each, with that one byte being simply a character map
+index. The character data is stored packed pixel rather than bitplaned, with
+one pixel per byte. Thus, to calculate the tilemap entry byte address for an X
+and Y position in the playing field, you'd calculate: (((Y&~7)<<4) + (X>>3))<<1
+
+To find the byte address of the pixel, you'd calculate:
+  (((TileData<<6) + ((Y&7)<<3) + (X&7))<<1) + 1
+ 
+Note that bits 4-7 of $2105 are ignored, as are $2107-$210c. They can be
+considered to be always 0.
+
+The next odd thing about Mode 7 is that you have full matrix transformation
+abilities. With creative use of HDMA, you can even change the matrix per
+scanline. See registers $211b-$2120 for details on the matrix transformation
+formula. The entire screen can be flipped with bits 0-1 of $211a.
+
+And finally, the playing field can actually be made larger than the tilemap. If
+bit 7 of $211a is set, bit 6 of $211a controls what is seen filling the space
+surrounding the map.
+
+The background priorities are:
+  Sprites with priority 3
+  Sprites with priority 2
+  Sprites with priority 1
+  BG1
+  Sprites with priority 0
+
+When bit 6 of $2133 is set, you get a related mode known as Mode 7 EXTBG. In
+this mode, you get a BG2 with 128 colors, which uses the same tilemap and
+character data as BG1 but interprets the high bit of the pixel as a priority
+bit. The priority map is:
+  Sprites with priority 3
+  Sprites with priority 2
+  BG2 pixels with priority 1
+  Sprites with priority 1
+  BG1
+  Sprites with priority 0
+  BG2 pixels with priority 0
+
+Note that the BG1 pixels (if BG1 is enabled) will usually completely obscure
+the low-priority BG2 pixels.
+
+BG2 uses the Mode 7 scrolling registers ($210d-e) rather than the 'normal' BG2
+ones ($210f-10). Subscreen, pseudo-hires, math, and clip windows work as
+normal; keep in mind OBJ and that you can do things like enable BG1 on main and
+BG2 on sub if you so desire. Mosaic is somewhat weird, see the section on
+Mosaic below.
+
+Note that BG1, being a 256-color BG, can do Direct Color mode (in this case, of
+course, there is no palette value so you're limited to 256 colors instead of
+2048). BG2 does not do direct color mode, since it is only 7-bit.
+
+
+Rendering the BGs
+-----------------
+
+Rendering a BG is simple.
+
+1) Get your H and V offsets (either by reading the appropriate registers or by
+   doing the offset-per-tile calculation).
+2) Use those to translate the screen X and Y into playing field X and Y
+   - Note this is rather complicated for Mode 7
+3) Look up the tilemap for those coordinates
+4) Use that to find the character data
+5) If necessary, de-bitplane it and stick it in a buffer.
+
+See the section "RENDERING THE SCREEN" below for more details.
+
+Unresolved Issues
+-----------------
+
+1) What happens to the very first pixel on the scanline in Hires Math?
+2) Various registers still need to know when writing to them is effective.
+
+
+WINDOWS
+=======
+
+The masking windows are pretty simple. The windows can be used to mask off a
+portion of any BG on the scanline. With HDMA, they can be adjusted per
+scanline. They can be combined in various ways, per BG. Each can be used to
+select either the region of the BG to keep, or the region of the BG to hide,
+per BG. All that's left is to see the registers above and the section
+"RENDERING THE SCREEN" below for details.
+
+The Color Window
+----------------
+
+The color window is rather different. The color window itself can be set
+to clip the colors of pixels to black (before math, so it's almost the same
+effect you'd get by setting all entries in the palette to black, then fixing
+them before you do subscreen addition--the only difference is that half math
+will not occur), and to prevent all color math effects from occurring. These
+can be applied never, always, inside the "clip" windows specified for the color
+window, or outside the "clip" window.
+
+Bits 6-7 of register $2130 controls whether the pixel colors (and half-math)
+will be clipped inside the window, outside the window, never, or always. Bits
+4-5 do the same for preventing color math.
+
+Consider the main screen set up so BGs 1 and 2 are visible in an 8x8
+checkerboard pattern, with all the BG1 pixels red and all the BG2 pixels blue.
+The subscreen is filled with a green BG, and color math is enabled on BG 1
+only. You'll end up with a yellow and blue checkerboard. Turn on the color
+window to clip colors, and you'll get a green and black checkerboard since
+the subscreen is only added (to a black pixel) where BG1 would be visible. If
+you clip math instead, you'll get the same display you'd get with color math
+disabled on all BGs.
+
+In hires modes, we use the previous main-screen pixel to determine whether the
+color window effect should be applied to a subscreen pixel. See "Color Math"
+below for details.
+
+
+RENDERING THE SCREEN
+====================
+
+Mosaic
+------
+
+The mosaic filter is applied after the BG is rendered and scrolled but before
+it is clipped, combined with other BGs, pseudo-hiresed, or mathed. Each XxX
+block of pixels is replaced with the upper-leftmost pixel of the block. The
+'blocks' are such that the upper-leftmost block is at the left edge of the
+screen at the scanline where $2106 was written (or the first visible scanline
+if it was not written this frame).
+
+Modes 5/6 Hires work slightly differently: they use a 2XxX block of
+half-pixels. Similarly, Modes 5/6 interlaced use a 2Xx2X block of half-pixels.
+So if you set $2106 to $0F ("1x1" blocks), the even half-pixels will be
+expanded to cover the odd half-pixels. $1F would cover the next even-and-odd
+pixel over as well. An example: put a single red pixel at line #1 pixel #0 of
+Mode 5 BG1, and a single blue pixel in the same place on BG2. Enable BG1 on
+main and BG2 on sub, you'll see the blue pixel only. Set $2106=$03, and you'll
+suddenly see both the blue and red pixels. Set $2106=$13, and you'll see
+"BRBR" on two lines.
+
+Mode 7's matrix transformations do not affect the mosaic block positions, so
+BG1 can be mosaiced about as normal. BG2 in EXTBG mode is weird, though: it
+uses bit 0 of $2106 to control "vertical mosaic" and bit 1 to control
+"horizontal mosaic". So if $2106 is $F1, BG2 will expand with 1x16 blocks. $F2
+will give 16x1 blocks, and only $F3 will give the expected 16x16 blocks. Note
+that BG1 still uses bit 0 as usual, so you can have BG1 expanded with 16x16
+blocks and the high-priority BG2 pixels expanded with 1x16 blocks on top of it.
+Or you could have BG1 rendered as normal, but with the high-priority pixels
+from BG2 expanded 16x1 on top of it.
+
+
+Color Math
+----------
+
+Each main-screen BG (and the color-0 backdrop, and the sprites (although
+sprites with palettes 0-3 never participate)) may be marked in register $2131
+to participate in color math. If the visible pixel is from a layer/OBJ
+participating in color math, we perform one of 8 operations on the pixel,
+depending on $2130 bit 1 and $2131 bits 6-7.
+
+  0 00: Add the fixed color. R, G, and B are added separately, and clipped to
+        the max.
+  0 01: Add the fixed color, and divide the result by 2 before clipping (unless
+        the Color Window is clipping colors here).
+  0 10: Subtract the fixed color from the pixel. For example, if the pixel is
+        (31,31,0) and the fixed color is (0,16,16), the result is (31,15,0).
+  0 11: Subtract the fixed color, and divide the result by 2 (unless CW etc).
+  1 00: Add the corresopnding subscreen pixel, or the fixed color if it's the
+        subscreen backdrop.
+  1 01: Add the subscreen pixel and divide by 2 (unless CW etc), or add the
+        fixed color with no division.
+  1 10: Subtract the subscreen pixel/fixed color.
+  1 11: Subtract the subscreen pixel and divide by 2 (unless CW etc), or sub
+        the fixed color with no division.
+
+In hires modes, color math is applied to the visible subscreen pixels as well.
+Choosing the math operation is simple: look at the previous main-screen pixel
+(i.e. if we're at pixel #6 on the 512-pixel screen (which is taken from pixel
+#4 on the subscreen), we look at pixel #5 (#3 on the main screen)). If no math
+was applied to that pixel, don't math this subscreen pixel either. If the
+fixed color was added/subtracted, add/subtract the fixed color. And if a pixel
+from the subscreen was added/subtracted, add/subtract that main-screen pixel
+(the original value before math). What happens to the subscreen pixel at the
+left edge of the screen is unknown.
+
+This is really important with color subtraction: normally, if you have
+a block of cyan (#00ffff) on main and a block of magenta (#ff00ff) on sub,
+subtraction would give a block of green. Hires math will give you a block of
+alternating green and red, which will probably appear yellow on your TV. If
+you've set $2131 bit 6 and this block is sitting alone in the middle of the
+backdrop, you'll have a bright line at the left edge where the fixed color was
+subtracted from the subscreen pixel and no 1/2 was applied (because the
+previous main pixel had the fixed color subtracted and no 1/2 applied).
+
+
+Rendering the Screen
+--------------------
+
+Note that this may be inaccurate.
+
+ 1) Go down the priority list to find the first BG/OBJ layer that is enabled on
+    main, not clipped, and has a non-transparent pixel here. You'll always
+    bottom out on the backdrop (color 0) if not before.
+ 2) If the color window clips colors here, set the color of that pixel to 0.
+ 3) If color math is applicable and the color window doesn't clip math here, do
+    math.
+
+Hires modes (BG modes 5 and 6 or any mode 0-4 with bit 3 of $2133 set) should
+process the visible subscreen pixels as described above.
+
+
+
+CONTROLLERS
+===========
+
+The SNES has 2 controller ports on the front of the unit, and an "expansion
+port" on the bottom (which AFAIK was only used by a few things released only
+in Japan). Little is known about the expansion port.
+
+A number of peripherals could be plugged into the controller ports:
+ * Joypads
+ * The Multitap (aka MP5), into which up to 4 joypads may be plugged.
+ * A Mouse, with 2 buttons.
+ * The SuperScope, a bazooka-like light gun.
+ * The Konami Justifiers, a normal style gun into which a second gun could
+   be plugged.
+
+There are probably others, these are just the ones I know anything about.
+
+
+Generic
+-------
+
+The controller ports of the SNES has 7 pins, laid out something like this:
+   _________________ ____________
+  |                 |            \
+  | (1) (2) (3) (4) | (5) (6) (7) |
+  |_________________|____________/
+
+The pins are:
+ 1: +5v (power)
+ 2: Clock
+ 3: Latch
+ 4: Data1
+ 5: Data2
+ 6: IOBit
+ 7: Ground
+
+Latch is written trhough bit 0 of register $4016. Writing 1 to this bit
+results in Latch going to whatever state means 'latch' to a joypad.
+
+Clock of Port 1 is connected to the 'read' signal of $4016, in that reading
+$4016 causes Clock to transition. Data1 and Data2 are then read, and Clock
+transitions back (at this point, the pad is expected to stick its next bits
+of data on Data1 and Data2). Clock of Port 2 is connected to $4017.
+
+Data1 and Data2 are read through bits 0 and 1 (respectively) of $4016 and
+$4017 (for Ports 1 and 2, respectively). Thus, you must read both bits at
+once, you can't choose to read only Data1 and leave Data2 for later.
+
+IOBit is connected to the I/O Port (which is accessed through registers
+$4201 and $4213). Port 1's IOBit is connected to bit 6 of the I/O Port, and
+Port 2's IOBit is connected to bit 7. Note that, since bit 7 of the I/O Port
+is connected to the PPU Counter Latch, anything plugged into Port 2 may
+latch the H and V Counters by setting IOBit to 0.
+
+Auto Joypad Read, when enabled by bit 0 of $4200, effectively does the
+following (in pseudo-ASM):
+  LDA $4212
+  ORA #$01
+  STA $4212  ; pretend it's writable
+  
+  LDA #$01
+  STA $4016
+  ; There may be a delay here
+  STZ $4016
+  
+  LDX #$0010
+  loop:
+      LDA $4016
+      REP #$20
+      LSR
+      ROL $4218
+      LSR
+      ROL $421C
+      SEP #$20
+
+      LDA $4017
+      REP #$20
+      LSR
+      ROL $421A
+      LSR
+      ROL $421E
+      SEP #$20
+      
+      DEX
+  BNE loop
+  
+  LDA $4212
+  AND #$7E
+  STA $4212  ; pretend it's writable again
+
+
+"Open Port"
+-----------
+
+If nothing is plugged into a port (or the thing plugged in doesn't connect to
+the pin), the SNES will read zeros from Data1 and Data2.
+
+
+Joypads
+-------
+
+The joypads return 16 bits of data out Data1, then one bits until
+latched again. The data is:
+  byetUDLRaxlr0000
+
+b/y/a/x/l/r are the similarly named buttons. 'e' is select. 't' is start.
+U/D/L/R are the pad directions. Note that the standard joypad can only
+return either U or D set, and either L or R set. Some games will crash or
+exhibit other odd behavior if both U and D and/or both L and R are set.
+
+Data2 is not even connected, nor is IOBit.
+
+
+Mouse
+-----
+
+The mouse returns 32 bits of data out Data1, and 1 bits thereafter. The data
+is:
+  00000000rlss0001 YyyyyyyyXxxxxxxx
+
+l/r are the two mouse buttons. 'ss' are the "speed bits", which are
+incremented mod 3 if Clock cycles while Latch is active. Y/X are the
+direction bits (set is up/left), and yyyyyyy/xxxxxxx are the distance
+traveled in the appropriate direction.
+
+Supposedly, the 'speed bits' may not match the internal speed setting when
+the mouse first receives power. The speed setting controls the delta curve
+of the mouse, with 0 giving a flat curve and 2 giving the greatest delta
+response.
+
+Data2 and IOBit are presumably not connected, but this is not known for
+sure.
+
+
+SuperScope
+----------
+
+The SuperScope returns 8 bits of data out Data1, and 1 bits thereafter. The
+data is:
+  fctp00on
+
+'f' is Fire, 'c' is Cursor, 't' is Turbo, 'p' is Pause, 'o' is Offscreen,
+and 'n' is Noise.
+
+The SuperScope has two modes of operation: normal mode and turbo mode. The
+current mode is controlled by a switch on the unit, and is indicated by the
+'t' bit. Note however that the 't' bit is only updated when the Fire button
+is pressed (i.e. the 'f' bit is set). Thus, when you turn turbo on the 't'
+bit remains clear until you shoot, and similarly when turbo is deactivated
+the bit remains set until you fire.
+
+In either mode, the Pause bit will be set for the first strobe after the
+pause button is pressed, and then will be clear for subsequent strobes until
+the button is pressed again. However, the pause button is ignored if either
+cursor or fire are down(?).
+
+In either mode, the Cursor bit will be set while the Cursor button is pressed.
+
+In normal mode, the Fire bit operates like Pause: it is on for only one strobe.
+In turbo mode, it remains set as long as the button is held down.
+
+When Fire/Cursor are set, Offscreen will be set if the gun did not latch during
+the previous strobe and cleared otherwise (Offscreen is not altered when
+Fire/Cursor are both clear).
+
+Noise is set if there is interference in the infrared transmission from the
+Scope to the receiver.
+
+If the Fire button is being held when turbo mode is activated, the gun sets the
+Fire bit and begins latching. If the Fire button is being held when turbo mode
+is deactivated, the next poll will have Fire clear but the Turbo bit will not
+be updated until the next fire (i.e. FcTp => turbo off => fcTp, not fctp).
+
+The PPU latch operates as follows: When Fire or Cursor is set, IOBit is set
+to 0 when the gun sees the TV's electron gun, and left a 1 otherwise. Thus,
+if the SNES also leaves it one (bit 7 of $4201), the PPU Counters will be
+latched at that point. This would also imply that bit 7 of $4213 will be 0
+at the moment the SuperScope sees the electron gun.
+
+Since the gun depends on the latching behavior of IOBit, it will only
+function properly when plugged into Port 2. If plugged into Port 1 instead,
+everything will work except that there will be no way to tell where on the
+screen the gun is pointing.
+
+When creating graphics for the SuperScope, note that the color red is not
+detected. For best results, use colors with the blue component over 75% and/or
+the green component over 50%.
+
+Data2 is presumably not connected, but this is not known for sure.
+
+
+Justifiers
+----------
+
+The Justifier returns 48 bits of data out Data1. Presumably it returns
+one bits after (if so, it really only returns 32 bits), but this is not
+known. The data is:
+  0000000000001110 01010101TtSsl000 1111111111111111
+
+T/t are the trigger states for guns 1 and 2. S/s are the start button states
+for guns 1 and 2. 'l' indicates which gun was connected to IOBit: 1 means
+gun 1, 0 means gun 2. Note that 'l' toggles even when gun 2 is not connected.
+
+IOBit is used just like for the SuperScope. However, since two guns may be
+plugged into one port, which gun is actually connected to IOBit changes each
+time Latch cycles. Also note, the Justifier does not wait for the trigger to
+be pulled before attempting to latch, it will latch every time it sees the
+electron gun. Bit 6 of $213F may be used to determine if the Justifier was
+pointed at the screen or not.
+
+Data2 is presumably not connected, but this is not known for sure.
+
+
+MP5
+---
+
+The MP5 plugs into one Controller Port on the SNES (typically Port 2), and
+has 4 ports for controllers to be plugged into it (labeled 2 through 5). It
+also has an override switch which makes it pass through Pad 2 and ignore
+everything else.
+
+If IOBit is 1, Clock is passed through to Pad 2 and Pad 3, Data1 is
+connected to Data1 on Pad 2, and Data2 is connected to Data1 on Pad 3. If
+IOBit is 0, Pads 4 and 5 are used instead of 2 and 3, respectively. In
+either case, Latch is passed through to all pads, and IOBit is presumably
+not passed through at all.
+
+Note that Clock is only passed through to the pads that are actually being
+passed through. Thus, you can read the first two pads (or let Auto-Joypad
+Read do it), then toggle IOBit and read the other two pads manually. Most
+games requiring more than 3 players do exactly this.
+
+Also note that there is nothing preventing the MP5 from functioning
+perfectly when plugged in to Port 1, except that the game must use bit 6 of
+$4201 instead of bit 7 to set IOBit and must use the Port 1 registers
+instead of the Port 2 registers. With 2 MP5 units, one could actually create
+an 8-player game!
+
+When Latch is active, 1s will be read from Data2 and 0s from Data1. This is
+sometmies used to detect the presence of an MP5 unit. The override switch
+disables this behavior.
+
+There are reports that the MP5 does not react immediately when IOBit is
+transitioned from 0 to 1. Thus, reading 2&3 then 4&5 will probably work
+better than vice versa.
+
+
+DMA AND HDMA
+============
+
+DMA, or "direct memory access" is found in a number of computer systems, not
+just the Super Nintendo. It's basically a way for a peripheral or
+coprocessor to read data directly from memory, instead of requiring the main
+CPU to do a number of reads and writes. This is typically faster, if only
+because it lets the system skip the opcode fetch-and-decode. In the SNES, the
+CPU is paused during DMA since the address busses are in use for the transfer.
+
+HDMA is similar in concept, though rather different in execution: instead of
+transferring a block of memory all at once, it transfers a few bytes during
+the H-Blank period of each scanline. This is extremely helpful, as most PPU
+registers may only be changed during a frame (at least without glitching)
+during this narrow window.
+
+The SNES has 8 channels (numbered 0-7) that can be used for either DMA or HDMA.
+HDMA takes priority over DMA if both are to occur at once, pausing all DMA and
+terminating a conflicting DMA immediately. Lower-numbered channels take
+priority over higher-numbered channels.
+
+
+DMA
+---
+
+A DMA transfer has three main variables, and a number of setting bits. These
+are: (those marked '*' must be set up before starting DMA)
+* Direction (bit 7 of $43x0): Read from PPU or write to PPU?
+* Fixed (bit 3 of $43x0): Adjust Address?
+* Increment (bit 4 of $43x0): Direction to adjust Address?
+* Mode (bits 0-2 of $43x0): See below...
+* Port (register $43x1): If this is 'xx', the register accessed will be $21xx.
+* AAddress (registers $43x2-4): Any CPU address, just like you'd use with
+                                the Absolute Long addressing mode.
+* Count (registers $43x5-6): The number of bytes to transfer.
+
+See register $43x0 for the correspondance between the Mode bits and the
+transfer mode. Note that One Register Write Once and One Register Write
+Twice end up being the exact same thing, and Two Registers Write Once
+and Two Registers Write Twice Alternale are the same, but that Two Registers
+Write Once and Two Registers Write Twice Each are different.
+
+DMA transfers take 8 master cycles per byte transferred, no matter the
+FastROM setting. There is also an overhead of 8 master cycles per channel, and
+an overhead of 12-24 cycles for the whole transfer.
+
+The basic process seems to be:
+ 1. Get byte and write it to the destination.
+    - The DMA seems to take advantage of the SNES's two address busses with one
+      shared data bus. AAddress is pushed out Bus A, Port is pushed out bus B,
+      and the read/write signals are sent according to Direction. The bus
+      marked read obligingly put data on the bus, while the bus marked write
+      obligingly writes that value.
+    - Thus, since the PPU/APU/WRAM registers are only accessible via Bus B,
+      attempts to access them via AAddress will result in Open Bus accesses.
+    - Attempts to access WRAM via both Bus A and Bus B (registers 2180-3) will
+      fail, with the 2180-3 access being Open Bussed.
+    - Also, DMA cannot access the $4300-$437f registers nor $420b nor $420c.
+      Writes will have no effect, and reads will return Open Bus.
+ 2. Adjust AAddress.
+    - If Fixed is set, do nothing. Else if Increment is set, subtract one,
+      else add one.
+    - Note that the bank byte is not modified.
+ 3. Decrement Count. If count is not zero, then go to step 1.
+    - Thus, if Count is initially zero, it wraps to 65535 before being
+      tested. So you end up transferring 65536 bytes.
+
+Note that Count ($43x5-6) ends up always 0, unless a conflicting HDMA
+terminates the transfer early.
+
+
+HDMA
+----
+
+HDMA has 4 flags and 5 variables. Again, those marked '*' are required
+before starting HDMA. In addition, those marked '+' are required if HDMA is
+to be started mid-frame.
+* Addressing Mode (bit 6 of $43x0): If clear, Direct, else Indirect.
+* Transfer Mode (bits 0-2 of $43x0): See below...
+* Port ($43x1): As for DMA.
+* AAddress ($43x2-4): Pointer to the HDMA Table. Not really 'required' for
+  starting mid-frame, but unless you're going to stop it before the next
+  init...
+- Indirect Address ($43x5-6): Used with Indirect Bank. See below...
+* Indirect Bank ($43x7): Used with Indirect Address. See below...
++ Address ($43x8-9): See below...
++ Repeat (bit 7 of $43xA): Whether to write every scanline or not
++ Line Counter (bits 0-6 of $43xA): See below...
+- DoTransfer: Used internally.
+
+Modes are the same as for DMA. However, note that only one cycle through the
+mode is done per scanline, so One Register Write Once will write 1 byte per
+scanline, while One Register Write Twice will write two.
+
+For each scanline during which HDMA is active (i.e. at least one channel is not
+paused and has not terminated yet for the frame), there are ~18 master cycles
+overhead. Each active channel incurs another 8 master cycles overhead (during
+which time $42xA is presumably loaded if necessary) for every scanline, whether
+or not a transfer actually occurs. If a new indirect address is required, 16
+master cycles are taken to load it. Then 8 cycles per byte transferred are
+used. Thus, HDMA takes a maximum of 466 master cycles per scanline (if all 8
+channels are active, require an indirect address load, and transfer 4 bytes).
+
+The basic process has two sections. First, at the beginning of the frame (V=0
+H=approx 6), for all active HDMA channels (see register $420c):
+ 1. Copy AAddress into Address.
+ 2. Load $43xA (Line Counter and Repeat) from the table. I believe $00 will
+    terminate this channel immediately.
+ 3. Load Indirect Address, if necessary.
+ 4. Set DoTransfer to true.
+
+The CPU is paused during this time. Overhead is ~18 master cycles, plus 8
+master cycles for each channel set for direct HDMA and 24 master cycles for
+each channel set for indirect HDMA.
+
+If you are starting HDMA mid-frame, you must basically do the init process
+manually by setting $43x8-A, and $43x5-6 for indirect channels. Note though
+that there is no way to perform step 4, so no transfer will be done the first
+transfer period. Also, note that a channel that has already terminated for the
+frame cannot be restarted.
+XXX: Or does it automatically do Step 4 when you enable the channel?
+
+Then, for each scanline from V=0 to V=$e0 (or V=$ef is overscan is enabled) at
+about H=$116:
+ 1. If DoTransfer is false, skip to step 3.
+ 2. For the number of bytes (1, 2, or 4) required for this Transfer Mode...
+    a. Read a byte from Address or Indirect Address, and increment.
+    b. Write the byte to Port, Port+1, Port+2, or Port+3, depending on the
+       Transfer Mode and which byte we're on.
+    - The same notes regarding DMA from PPU to PPU or RAM to RAM via $2180
+      apply here as well.
+ 3. Decrement $43xA.
+ 4. Set DoTransfer to the value of Repeat.
+ 5. If Line Counter is zero...
+    a. Read the next byte from Address into $43xA (thus, into both Line
+       Counter and Repeat).
+    b. If Addressing Mode is Indirect, read two bytes from Address into
+       Indirect Address (and increment Address by two bytes).
+       - One oddity: if $43xA is 0 and this is the last active HDMA channel for
+         this scanline, only load one byte for Address, and use the
+         $00 for the low byte. So Address ends up incremented one less than
+         otherwise expected, and one less CPU Cycle is used.
+    c. If $43xA is zero, terminate this HDMA channel for this frame. The bit in
+       $420c is not cleared, though, so it may be automatically restarted next
+       frame.
+    d. Set DoTransfer to true.
+ 6. Continue with Step 1 next scanline.
+
+HDMA does not occur during V-Blank, as any writes it might perform are
+likely have no visible effect anyway. The start-of-frame processing then resets
+all active channels at the end of V-Blank. This allows updating of the HDMA
+registers during V-Blank without worrying about the transfer beginning
+immediately and scribbling on the PPU state.
+
+Note how the above implicitly defines the format of the HDMA table.
+Explicitly, the format is a series of entries. Each entry begins with a line
+count and repeat flag. If repeat is false, there is one scanline worth of
+data following and the count is the number of scanlines to wait before
+processing the next entry. If it's true, the line count is the number of
+scanlines worth of data following. The data following is either a pointer to
+the data (for Indirect HDMA), or the data itself (for Direct HDMA).
+
+Looking at the above, it's clear why Address, and Repeat/Line Counter must
+be initialized by hand when starting HDMA mid-frame: they're only
+automatically initialized at the start of the frame. Note how AAddress is
+not affected by HDMA, though Address and Repeat/Line Counter are.
+
+
+HISTORY
+=======
+
+In the beginning... Well, ok, somewhere in the middle is where I came in. In
+my beginning, there was Yoshi's register doc (the one with bananas) and
+snesmap.txt (the one missing all those appendices). Both good register docs,
+complete as far as bits go, but sorely lacking in the explanations. And there
+was the snes9x source, with more clear semantics but many errors. I began
+writing test ROMs for others to run, and discover the real behavior of the
+SNES. Soon, someone lent me a device to test the ROMs myself.
+
+I discovered many things, and lamented the errors in the documentation
+available. Finally one day I decided to sit down and write out everything I
+had discovered. An early version of this was the result. Along the way, and
+continuing since, I've revised this document with new findings. I believe this
+is the most accurate SNES PPU/graphics document available today. Enjoy!

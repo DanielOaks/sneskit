@@ -1,0 +1,1 @@
+<Project name="template"><MagicFolder excludeFolders="CVS;.svn" filter="*" name="include" path="include\"></MagicFolder><MagicFolder excludeFolders="CVS;.svn" filter="*" name="source" path="source\"><File path="header.asm"></File><File path="main.asm"></File></MagicFolder><File path="Makefile"></File><File path="config.ld"></File></Project>

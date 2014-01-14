@@ -1,0 +1,448 @@
+=============================================================================
+ Anomie's SNES Timing Doc
+ $Revision: 1126 $
+ $Date: 2007-04-21 15:07:05 -0400 (Sat, 21 Apr 2007) $
+ <anomie@users.sourceforge.net>
+=============================================================================
+
+This is a document intended to describe various aspects of SNES timing. It
+will probably not be useful unless you already know a good bit about the SNES.
+
+BTW, special credit to byuusan for the critical observation that the SNES
+returns to a known timing position on reset. Thus, a deterministic ROM (i.e. it
+doesn't depend on user input or any other randomness) will always give the same
+results on reset. And a series of ROMs which vary only in the master cycle
+count before testing some event (like the value of $4212) can tell us just when
+such events occur.
+
+A note on timings: stating that a bit set is at H=X means that a read that
+would latch X-.5 were it reading $2137 will see the bit not set, while a read
+that would latch X were it reading $2137 will see the bit set. The counter may
+also be latched by writing 0 to $4201 bit 7: this will latch 1 dot later than
+if the same memory access cycle were reading $2137.
+
+
+CONTENTS
+========
+
+- S-CPU (5A22)
+  - Clocks & Refresh
+  - Instructions
+  - Interrupts
+  - DMA
+  - HDMA
+  - Auto Joypad Read
+  - Registers
+- S-PPU
+  - Rendering
+  - Blanking periods
+  - Registers
+  - OAM Reset
+- S-APU
+  - SPC700
+    - Clock
+    - Instructions
+    - Timers
+  - DSP 
+
+
+S-CPU (5A22)
+============
+
+CLOCKS & REFRESH
+----------------
+
+The SNES master clock runs at about 21.477MHz NTSC (theoretically 1.89e9/88
+Hz). The best number we have for PAL is 21.28137MHz.
+
+A CPU internal operation (an IO cycle) takes 6 master cycles. A memory access
+cycle takes 6, 8, or 12 master cycles, depending on the memory region accessed
+and bit 0 of CPU register $420d.
+
+The SNES runs 1 scanline every 1364 master cycles, except in non-interlace mode
+scanline $f0 of every other frame (those with $213f.7=1) is only 1360 cycles.
+Frames are 262 scanlines in non-interlace mode, while in interlace mode frames
+with $213f.7=0 are 263 scanlines. "V-Blank" runs from either scanline $e1 or
+$f0 until the end of the frame.
+
+The CPU is paused for 40 cycles beginning about 536 cycles after the start of
+each scanline. Current theory is that this is used for WRAM Refresh. The exact
+timing is that the refresh pause begins at 538 cycles into the first scanline
+of the first frame, and thereafter some multiple of 8 cycles after the previous
+pause that comes closest to 536.
+
+
+INSTRUCTIONS
+------------
+
+For specifics on particular instructions, see any generic 65816 doc. The GTE
+datasheet is particularly nice, as it identifies the CPU activity for each
+cycle of the instruction.
+
+To determine the exact length of any CPU instruction, you must examine its
+behavior for each cycle, and count 6, 8, or 12 master cycles as appropriate.
+
+The WAI instruction stops the processor. The processor restarts when either
+the /NMI or /IRQ line is low (or /RESET, but we don't care about that too
+much). It takes 12 master cycles (2 IO cycles) to end the WAI instruction, at
+which point the NMI or IRQ handler may actually be executed.
+
+
+INTERRUPTS
+----------
+
+The internal timer will set its NMI output low at H=0.5 at the beginning of
+V-Blank. The CPU's /NMI input is forced high by clearing bit 7 of register
+$4200, so the CPU may not actually see the NMI transition. The CPU will jump to
+the NMI routine at the end of the instruction during which /NMI transitions.
+
+The internal timer sets its NMI output high at H=0 V=0, or when register
+$4210 is read. Possibly also when $4200 is written?
+
+If the CPU is halted (i.e. for DMA) while /NMI goes low, the NMI will trigger
+after the DMA completes (even if /NMI goes high again before the DMA
+completes). In this case, there is a 24-30 cycle delay between the end of DMA
+and the NMI handler, time enough for an instruction or two.
+
+
+The internal timer will set its IRQ output low under the following conditions
+('x' and 'y' are bits 4 and 5 of $4200, HTIME is registers $4207-8, and VTIME
+is $4209-a):
+  yx    trigger point
+  00 => Never
+  01 => H-IRQ:  every scanline, H=HTIME+~3.5
+  10 => V-IRQ:  V=VTIME, H=~2.5
+  11 => HV-IRQ: V=VTIME, H=HTIME+~3.5
+
+The actual formula for the trigger point is as follows. V-IRQ is just like
+HV-IRQ with H=0. If H=0, $4211 bit 7 gets set 1374 master cycles after dot 0.0
+of the previous scanline. Otherwise, it gets set 14+H*4 master cycles after
+dot 0.0 of the current scanline. Note that the 'dot offset' will change due to
+the two long dots per scanline. Also, no IRQ will trigger for dot 153 on the
+short scanline in non-interlace mode, and no IRQ will trigger for dot 153 on
+the last scanline of any frame.
+
+The internal timer will set its IRQ output high when $4211 is read, or when
+IRQs are disabled by a write to $4200. Note that the expansion port and the
+cart connector both have access to the /IRQ line, and may be able to trigger
+IRQs on their own. When enabling IRQs, the IRQ output will go low even if the
+enable write occurs at the exact cycle when the IRQ is scheduled to trigger
+For example, if HV-IRQ is set for (0,1) and the last cycle of the STA $4200 is
+at (0,0)+1372 master cycles, the IRQ line will still go low.
+
+
+The CPU will jump to the NMI or IRQ handler at the end of the instruction when
+/NMI transitions or when /IRQ is low and the I flag is clear. The actual check
+occurs just before the final CPU cycle of the instruction, which means that the
+jump will begin at the earliest 6 to 12 master cycles after /NMI or /IRQ. Also
+note that PLP, CLI, SEI, SEP #$04, and REP #$04 update the flags during their
+final CPU cycle, so the IRQ check will use the old value of I rather than the
+new one set by the current instruction. RTI, BRK, and COP on the other hand do
+not have this issue.
+
+So for the following code:
+ >     ; set up IRQ
+ >     SEI
+ >     WAI
+ >     STZ $00
+ >     LDA #$01
+ >     CLI
+ >     LDA #$42
+ >     STP
+ > 
+ > IRQHandler:
+ >     STA $00
+ >     RTI
+Memory location $00 will end up set to 0x42, not 0 or 1, because the I flag
+isn't clear before the final cycle of CLI. And for the following code:
+ >     ; set up IRQ
+ >     SEI
+ >     WAI
+ >     CLI
+ >     SEI
+The IRQ will actually trigger following the SEI instruction, not before it (but
+the flags pushed during the IRQ handler will have the I flag set). OTOH, the
+following code will not allow an IRQ to trigger at all if the RTI sets the I
+flag:
+ >     ; set up IRQ
+ >     SEI
+ >     WAI
+ >     CLI
+ >     RTI
+And the following code (with RTI clearing I):
+ >     ; set up IRQ
+ >     SEI
+ >     WAI
+ >     STZ $00
+ >     LDA #$01
+ >     RTI
+ >
+ >     ; -> RTI returns here
+ >     LDA #$42
+ >     STP
+ > 
+ > IRQHandler:
+ >     STA $00
+ >     RTI
+Will result in memory location $00 being set to 1, not 0x42.
+
+If /NMI and /IRQ are both pending, NMI takes precedence.
+
+And the datasheet is inaccurate regarding that first cycle of the IRQ/NMI
+pseudo-opcode. It's an opcode fetch cycle from PB:PC (typically 6 or 8 master
+cycles), not an IO cycle (always 6 master cycles) as the datasheet claims.
+
+
+DMA
+---
+
+DMA is activated by writing a 1 to any bit of CPU register $420b. The CPU is
+halted during the DMA transfer.
+
+DMA takes 8 master cycles per byte transferred, regardless of the memory
+regions accessed. It is unknown what happens if you attempt DMA to or from
+$4000-$41ff, since that memory region requires 12 master cycles for access.
+There is also 8 master cycles overhead per channel.
+
+The exact DMA timing works as follows: After $420b is written, the CPU gets one
+more CPU cycle before the pause (on a standard "STA $420b", this would be the
+opcode fetch for the next instruction). The speed of the next CPU cycle to
+execute after the DMA determines the CPU Clock speed for the DMA transfer.
+
+Now, after the pause, wait 2-8 master cycles to reach a whole multiple of 8
+master cycles since reset. The perform the DMA: 8 master cycles overhead and 8
+master cycles per byte per channel, and an extra 8 master cycles overhead for
+the whole thing. Then wait 2-8 master cycles to reach a whole number of CPU
+Clock cycles since the pause, and only then resume S-CPU execution.
+
+The exact timing of the read within the DMA period is not known. Best guess at
+this point is that 2-4 of the "whole DMA overhead" is before the transfer and
+the rest after.
+
+An example: "STA $420b : NOP", one channel active for a 3 byte transfer. The
+pause occurs after the NOP opcode is fetched, so the CPU Clock Speed is 6
+master cycles due to the following IO cycle in the NOP. After the pause, say we
+need 2 master cycles to reach an even multiple of 8 master cycles since reset
+[total=2]. Then wait 8 for DMA init [total=10], 8 for channel init [total=18],
+and 8*3 for the actual transfer [total=42]. To reach a whole number of CPU
+Clock cycles since the pause, we must wait 6 master cycles (remember, 0 is not
+an option) [total=48]. 
+
+Same thing, but begin the pause 2 master cycles earlier. Thus, we must wait 4
+master cycles to get to a multiple of 8 since reset [total=4], then our 40 for
+the DMA transfer [total=44]. To get to a whole CPU Clock, 4 master cycles are
+needed [total=48].
+
+Same thing, but begin the pause 2 master cycles earlier. Thus, we must wait 6
+master cycles to get to a multiple of 8 since reset [total=6], then our 40 for
+the DMA transfer [total=46]. To get to a whole CPU Clock, only 2 master cycles
+are needed [total=48].
+
+One last time, begin the pause 2 master cycles earlier. Thus, we must wait 8
+master cycles to get to a multiple of 8 since reset [total=8], then our 40 for
+the DMA transfer [total=48]. To get to a whole CPU Clock sinze pause, 6 master
+cycles are again needed [total=54]. So this transfer took an extra 6 master
+cycles...
+
+
+HDMA
+----
+
+HDMA is enabled by writing a 1 to any bit of CPU register $420c. Much like
+DMA, the CPU is halted during HDMA operations. HDMA takes priority over DMA.
+
+For all active channels, the HDMA registers are initialized at about V=0
+H=6. The overhead is ~18 master cycles, plus 8 master cycles for each channel
+set for direct HDMA and 24 master cycles for each channel set for indirect
+HDMA. Presumably, the exact timing for the HDMA pause is the same as that for
+DMA.
+
+HDMA channels may be deactivated mid-frame if $00 is read into $43xA from
+the HDMA table (or possibly if $00 is written to $43xA manually). They may
+also be activated or deactivated by writing $420c. All HDMA channels are
+deactivated at the start of V-Blank.
+
+The actual HDMA transfer begins at dot 278 of the scanline (or just after, the
+current CPU cycle is completed before pausing), for every visible scanline
+(0-224 or 0-239, depending on $2133 bit 3). For each scanline during which HDMA
+is active (i.e. at least one channel has not yet terminated for the frame),
+there are ~18 master cycles overhead. Each active channel incurs another 8
+master cycles overhead for every scanline, whether or not a transfer actually
+occurs. If a new indirect address is required, 16 master cycles are taken to
+load it. Then 8 cycles per byte transferred are used.
+
+
+AUTO JOYPAD READ
+----------------
+
+When enabled, the SNES will read 16 bits from each of the 4 controller port
+data lines into registers $4218-f. This begins between dots 32.5 and 95.5 of
+the first V-Blank scanline, and ends 4224 master cycles later. Register $4212
+bit 0 is set during this time. Specifically, it begins at dot 74.5 on the first
+frame, and thereafter some multiple of 256 cycles after the start of the
+previous read that falls within the observed range.
+
+Reading $4218-f during this time will read back incorrect values. The only
+reliable value is that no buttons pressed will return 0 (however, if buttons
+are pressed 0 could still be returned incorrectly). Presumably reading $4016/7
+or writing $4016 during this time will also screw things up.
+
+
+REGISTERS
+---------
+
+$4210 bit 7: shows the status of the internal timer's NMI output (1=low).
+Reading this bit causes the NMI output to go high.
+
+$4211 bit 7: shows the status of the internal timer's IRQ output (1=low) OR
+the status of the CPU's external /IRQ line. Reading this bit causes the
+internal timer's IRQ output to go high.
+
+$4212 bit 0: set when Auto Joypad Read is being performed.
+
+$4212 bit 6: indicates H-blank. Set at H=274 of every scanline, and cleared at
+H=1.
+
+$4212 bit 7: indicates V-blank. Set at H=0 at the beginning of V-Blank, and
+cleared at H=0 V=0.
+
+$4214-7: 8 cycles (8 master cycles or somewhere between 48 and 64 master
+cycles?) after $4203 is written, the multiplication result may be read. 16
+master cycles (or somewhere between 96 and 128 master cycles) after $4206 is
+written, the division result may be read. What happens before the time is up
+(or if you initiate another multiplication/division while calculating) is
+unknown.
+
+
+S-PPU
+=====
+
+The PPU is clocked off the same oscillator as the S-CPU.
+
+RENDERING
+---------
+
+The PPU uses the same measure of frames and scanlines as the 5A22 S-CPU. There
+are always 340 dots ('pixels') per scanline; normally dots 323 and 327 are 6
+master cycles instead of 4.
+
+Note that a superscope pointing at pixel (X, Y) on the screen will latch
+approximately dot X+40 on scanline Y+1.
+
+The PPU outputs one pixel every 4 master cycles, for dots 22-277(?) on
+scanlines 1-224 or 1-239. Note that (for NTSC) the color carrier is 6 master
+cycles, hence the interesting color effects seen with alternating pixel
+patterns.
+
+The PPU seems to access memory 2-3 tiles ahead of the pixel output. At least,
+when we disable Force Blank mid-scanline, there is garbage for about 16-24
+pixels.
+
+
+BLANKING PERIODS
+----------------
+
+V-Blank begins on scanline $E1 or $F0, at H=0, depending on bit 2 of
+$2133. If this bit is set, then cleared between $E0 and $F0, most "at the
+start of V-Blank" events will trigger at the next appropriate H point. Note
+though that clearing it too late may cause the TV to lose sync, possibly
+because the PPU doesn't get a chance to output a correct V-Blank signal.
+Setting the bit 'too late' will not resume HDMA or rendering or re-trigger
+NMI, but VRAM will be locked as if rendering were still proceeding.
+
+V-Blank ends at V=0 H=0.
+
+H-Blank begins at H=274 of every scanline, and ends at H=1.
+
+
+REGISTERS
+---------
+
+$2134-6: Some unknown number of master cycles after $211c is set, the product
+may be read from these registers. What value may be read before these cycles
+have elapsed is unknown.
+
+$2137: Read to latch the PPU dot position.
+
+$213F bit 6: Set when the PPU dot counter is latched (or shortly thereafter),
+and cleared on read (and maybe the beginning/end of V-Blank too?).
+
+$213F bit 7: Toggles every frame, at V=0 H=1.
+
+
+OAM RESET
+---------
+
+At the beginning of V-Blank if force-blank is disabled, the internal OAM
+address is reset to the value last written to $2102-3. byuu reports this occurs
+at H=10 on scanline 225/240. Also, byuu reports the reset occurs on any 1->0
+transition of $2100 bit 7.
+
+
+DETAILED RENDERER TIMING
+------------------------
+
+Most of this is conjecture, based on a NES timing expetiment conducted by
+Brad Taylor (big_time_software@hotmail.com) around Sept 25, 2000.
+
+All SNES VRAM memory access cycles are 4 master cycles long (the same amount
+of time it takes to output one pixel), compared to 8 (2 pixels) for the NES.
+The scanline is thus 340 memory accesses long. Also, the SNES PPU can access
+2 bytes at a time (one from each VRAM chip) where the NES could only access
+one. Like the NES, 'rendering' begins on scanline 0, however nothing is
+actually output for scanline 0.
+
+Beginning when the PPU begins outputting the first pixel on the scanline
+(just after H-Blank), we load the data for 32 tiles. For Modes 0-4, each BG
+takes 1 memory access for the tilemap word, and either 1, 2, or 4 accesses for
+8 pixels of character data (depending on if the BG is 2, 4, or 8 bits, and
+see now why the bitplanes are stored the way they are?). For Modes 5 and 6,
+2 or 4 memory accesses (again, if the BG is 2 or 4 bits) are required for 16
+half-pixels of character data. Since this is at most 8 memory accesses for
+any BG mode, and 8 pixels are loaded at a time, you can see we just break
+even. For Mode 7, a tilemap entry is read from the low-byte VRAM chip and a
+pixel from the high-byte chip. During the rendering of the first tile, the
+third tile is being loaded from VRAM. This is a total of 256 memory access
+cycles.
+
+Also during this time, OAM is being examined to determine the first 32
+sprites on the next scanline. This (and the later loading during H-Blank) is
+the reason for the dummy scanline 0, otherwise there would be no sprite data
+for the first scanline on the screen.
+
+During H-Blank, 68 memory access cycles are devoted to loading the next
+scanline from 34 4-bit sprite tiles, and 16 memory access cycles to loading
+the scanline for the first two tiles of the next scanline (recall that the
+third tile is being loaded while the first is being rendered). This totals
+340 memory access cycles.
+
+
+S-APU
+=====
+
+SPC700
+------
+
+The SPC700 is nominally clocked at 1024000 Hz, however my SNES seems to run at
+~1026900 Hz instead.
+
+Instruction timing is not well known. There are some docs available, but their
+accuracy is suspect.
+
+The SPC700 has 3 timers, one clocked at "64000 Hz" and two at "8000 Hz". In
+reality, the fast timer ticks every 16 cycles and the slow every 128, whatever
+length the SPC700 cycles really are.
+
+The SPC700 communicates with the S-CPU via 4 registers. Exact memory access
+timings on these registers is not known, however it is possible that the 5A22
+will be performing a read at the instant the SPC700 is performing a write. The
+5A22 will then read the logical OR of the old and new values of the register.
+
+
+DSP 
+---
+
+The DSP outputs samples at "32000 Hz", although a real rate of one sample
+every 32 SPC700 cycles is more likely.
+
+Other timing is not known. If you do know, please fill in the details here.

@@ -1,0 +1,151 @@
+=============================================================================
+ Anomie's SNES Memory Mapping Doc
+ $Revision: 1160 $
+ $Date: 2008-12-21 12:40:39 -0500 (Sun, 21 Dec 2008) $
+ <anomie@users.sourceforge.net>
+=============================================================================
+
+This is a document intended to describe the SNES memory map. It will NOT
+include information on the MAD-1 or any other address decoder.
+
+HARDWARE
+========
+
+The SNES has one 8-bit data bus, two address busses typically known as
+"Address Bus A" and "Address Bus B".
+
+Data Bus
+--------
+
+The data bus is 8 bits. If nothing sets a value on the data bus for any
+particular read request, the last value placed on the bus is read instead
+(this is known as "Open Bus").
+
+LINE | CART | EXPAND
+-----+------+--------
+ D0  |  19  |   11
+ D1  |  20  |   12
+ D2  |  21  |   13
+ D3  |  22  |   14
+ D4  |  50  |   15
+ D5  |  51  |   16
+ D6  |  52  |   17
+ D7  |  53  |   18
+
+Address Bus A
+-------------
+
+This address bus is 24 bits, along with read and write lines (/RD and /WR)
+and 2 auxiliary lines (/CART and /WRAM). WRAM is connected to this bus, as
+well as the cart connector.
+
+LINE | CART          LINE  | CART
+-----+------        -------+------
+ A0  |  17            A14  |  39
+ A1  |  16            A15  |  40
+ A2  |  15            A16  |  41
+ A3  |  14            A17  |  42
+ A4  |  13            A18  |  43
+ A5  |  12            A19  |  44
+ A6  |  11            A20  |  45
+ A7  |  10            A21  |  46
+ A8  |   9            A22  |  47
+ A9  |   8            A23  |  48
+ A10 |   7            /RD  |  23
+ A11 |   6            /WR  |  54
+ A12 |  37           /CART |  49
+ A13 |  38           /WRAM |  32
+
+Address Bus B
+-------------
+
+This address bus is 8 bits, along with read and write lines (/RD and /WR).
+d /WRAM). WRAM, PPU1, PPU2, and APU are connected to this bus, as well as
+the cart and expansion ports.
+
+LINE | CART | EXPAND
+-----+------+--------
+ PA0 |  28  |    1
+ PA1 |  59  |    2
+ PA2 |  29  |    3
+ PA3 |  60  |    4
+ PA4 |  30  |    5
+ PA5 |  61  |    6
+ PA6 |   3  |    7
+ PA7 |  34  |    8
+/PARD|   4  |   10
+/PAWR|  35  |    9
+
+
+MEMORY MAP
+==========
+
+As far as the SNES is concerned, this is the memory map. "LoROM", "HiROM",
+and anything else is just the cart responding differently to the addresses
+placed on Address Bus A.
+
+WRAM responds to Address Bus A whenever /WRAM is active, and to registers
+$2180-$2183 on Address Bus B. APU responds to $40-$7F on Address Bus B. PPU1
+and PPU2 respond to $2100-$213F on Address Bus B. The cart is expected to
+respond when /CART is active, but it can respond to any address on either bus
+that is not otherwise mapped. Similarly, the device plugged into the expansion
+port may respond to any unmapped register on Address Bus B.
+
+The 'Speed' column indicates the memory access speed for that area of memory.
+The SNES master clock runs at about 21MHz (probably as close to 1.89e9/88 Hz as
+possible). Internal operation CPU cycles always take 6 master cycles. Fast
+memory access cycles also take 6 master cycles, Slow memory access cycles take
+8 master cycles, and XSlow memory access cycles take 12 master cycles.
+
+
+  Banks  |  Addresses  | Speed | Mapping
+---------+-------------+-------+---------
+ $00-$3F | $0000-$1FFF | Slow  | Address Bus A + /WRAM (mirror $7E:0000-$1FFF)
+         | $2000-$20FF | Fast  | Address Bus A
+         | $2100-$21FF | Fast  | Address Bus B
+         | $2200-$3FFF | Fast  | Address Bus A
+         | $4000-$41FF | XSlow | Internal CPU registers (see Note 1 below)
+         | $4200-$43FF | Fast  | Internal CPU registers (see Note 1 below)
+         | $4400-$5FFF | Fast  | Address Bus A
+         | $6000-$7FFF | Slow  | Address Bus A
+         | $8000-$FFFF | Slow  | Address Bus A + /CART
+---------+-------------+-------+---------
+ $40-$7D | $0000-$FFFF | Slow  | Address Bus A + /CART
+---------+-------------+-------+---------
+ $7E-$7F | $0000-$FFFF | Slow  | Address Bus A + /WRAM
+---------+-------------+-------+---------
+ $80-$BF | $0000-$1FFF | Slow  | Address Bus A + /WRAM (mirror $7E:0000-$1FFF)
+         | $2000-$20FF | Fast  | Address Bus A
+         | $2100-$21FF | Fast  | Address Bus B
+         | $2200-$3FFF | Fast  | Address Bus A
+         | $4000-$41FF | XSlow | Internal CPU registers (see Note 1 below)
+         | $4200-$43FF | Fast  | Internal CPU registers (see Note 1 below)
+         | $4400-$5FFF | Fast  | Address Bus A
+         | $6000-$7FFF | Slow  | Address Bus A
+         | $8000-$FFFF | Note2 | Address Bus A + /CART
+---------+-------------+-------+---------
+ $C0-$FF | $0000-$FFFF | Note2 | Address Bus A + /CART
+
+Note 1: The address for internal CPU registers may go out Address Bus A,
+  however the CPU ignores the data bus. It is unknown whether the data bus
+  is ignored for the whole memory region, or just for those addresses which
+  are actually registers. It is also unknown whether CPU writes show up on
+  the data bus or not. Current theory is that addresses and writes will show
+  up, but reads may or may not, and the data bus is only ignored for those
+  bits of those registers actually mapped (e.g., data bus is ignored for only
+  bit 7 of $4211).
+
+Note 2: If bit 0 of CPU register $420d is set, the speed is Fast, otherwise
+  it is Slow.
+ 
+
+
+=============================================================================
+HISTORY:
+
+Version 1.1: Jun 18, 2003
+ * Tested the memory access speed of all 256-byte memory blocks, and filled in
+   the table with the findings.
+
+Version 1.0:
+ * Initial version.

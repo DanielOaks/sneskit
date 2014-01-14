@@ -1,0 +1,385 @@
+;=======================================================================
+;
+;   Name:	        ICEU10.700
+;
+;   Group:	        S-NES Emulator SE BIOS.
+;
+;   Revision:	        1.02
+;
+;   Date:	        11/05/2004
+;
+;   Author:	        Frank Hughes <fh512@yahoo.co.uk>
+;
+;
+;   Changes:
+;
+;    DATE     REVISION				DESCRIPTION
+;  --------   --------	-------------------------------------------------------
+;  11/05/4	1.02    Corrected name of the ROM Dumper.
+;  30/03/4      1.01    Added name of the ROM Dumper to Source Description.
+;  12/11/3     	1.00	Original
+;
+;   Description:
+;
+;	This is a Reverse Engineering of the sound code
+;       used in the Development Unit, 'S-NES Emulator SE'.
+;       It provides functions to allow the S-NES CPU to play one
+;       of two samples with various timbre and envelopes, allows
+;       modification to these presets, and can pass requested
+;       RAM data back to the S-NES.
+;       I plan on writing a S-NES interface to allow users
+;       to experiment with this interesting piece of software! :)
+;
+;       *Big* thanks to interacti for dumping this ROM.
+;       Note: this code is the property of Nintendo Co. Ltd., and 
+;       is provided here for non-profit and educational purposes.
+;
+; 	--- Snes-CPU Commands to the Snes-APU: ---
+; 	01:  	 Setup Voice Data (SCPUIO0 = Table No.) and play voice.
+; 	$02:  	 Stop Voice.
+; 	$7f:  	 Play voice.
+; 	-ve:	 S-SDSP Write (SCPUIO0 = Data , SCPUIO1 = Addr (lower 7bits).
+; 	default: Send APU-RAM byte to S-SCPU (SCPUIO2/3 = APU-RAM Addr).
+;
+; 	--- APU Block Structure ---
+; 	Block 00: start $0800 length $01F5
+; 	Block 01: start $8000 length $0008
+; 	Block 02: start $8100 length $007E
+; 	Execution Address: $0800
+; 	---------------------------
+;
+; 	--- Memory Map: ---
+; 	$0000 - $007f	: S-SDSP Buffer (mirror image of Addresses).
+; 	$0080 - $0081	: Indirect Pointer.
+; 	$0091 - $0091	: Voice Parameter Table number.
+; 	$09ae - $09f4	: A table of 8 Voice parameters (8-bytes a piece).
+; 	$8000 - $8007	: Source Directory.
+; 	$8100 - $817d	: Source Data.
+; 	-------------------
+;
+;=======================================================================
+	ApuBlockStart	$0800
+ApuBiosBegin
+	clrp				; Set Direct Page to Page0.
+	mov	x,#$cf			; Load X with Stack Top.
+	mov	sp,x			; Set Stack Top to #$cf.
+	mov	a,#$00			; Write value to 0.
+	mov	x,a			; Indirect Index to 0.
+
+; -- Zero RAM Area $00~$c7.
+_dis0807
+	mov	(x)+,a		
+	cmp	x,#$c8
+	bne	_dis0807
+;--- Initialise S-DSP Unused Voices.
+	mov	y,#$10			; Preset to Voice #1.
+_dis080e
+	push	y			; Push Current Voice index onto stack.
+	mov	a,#$00			; VOL_L = 0.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	inc	y
+	mov	a,#$00			; VOL_R = 0.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	inc	y
+	inc	y
+	inc	y
+	mov	a,#$00			; SCRN = $00.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	inc	y
+	mov	a,#$00			; ADSR_1 = $00.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	inc	y
+	inc	y
+	mov	a,#$00			; GAIN = 0.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	pop	a			; Pull Current Index off the stack.
+	clrc				; Reset Carry for Addition.
+	adc	a,#$10			; Adjust to next channel index.
+	mov	y,a			; Transfer back to Y.
+	cmp	a,#$80			; Done for all channels?
+	bne	_dis080e		; Loop back if no.
+;--- Voice 0 Initialisation.
+	mov	y,#$2c			; EVOL_L
+	mov	a,#$00			; Set Echo Volume (Left) to 0.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	mov	y,#$3c			; EVOL_R
+	mov	a,#$00			; Set Echo Volume (Right) to 0.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	mov	y,#$0d			; EFB
+	mov	a,#$00			; Set Echo Feedback to 0.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	mov	y,#$7d			; EDL
+	mov	a,#$00			; Set Echo Delay to 0.
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	mov	a,#$80			; Source Directory Address = $8000.
+	mov	y,#$5d			; DIR
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+	mov	a,#$20			; Noise Off, Enable Echo Region.
+	mov	y,#$6c			; FLG
+	call	_dis09ee		; Write Byte to S-SDSP.
+
+; ================= Setup Default parameter for Voice. ==================
+; --- Set Main Volume to +96.
+	mov	a,#$60		
+	mov	$000c,a			; Variable for Main Volume Left.
+	mov	$001c,a			; Variable for Main Volume Right.
+; --- Disable Echo Memory Area.
+	mov	a,#$20			; #%0-0-1-000000 (Echo Memory Disable)
+	mov	$006c,a			; FLG
+; --- Disable Pitch Modulation, Noise and Echo.
+	mov	a,#$00
+	mov	$002d,a			; Variable for Pitch Modulation.
+	mov	$003d,a			; Variable for Noise Flag.
+	mov	$004d,a			; Variable for Voice Echo On/Off.
+; --- Set Main Volume to +96.
+	mov	a,#$60
+	mov	$0000,a			; Variable for Voice0 Volume Left.
+	mov	$0001,a			; Variable for Voice0 Volume Right.
+; --- Set Pitch Height.
+	mov	a,#$08
+	mov	$0002,a
+	mov	a,#$08
+	mov	$0003,a
+; --- Set Source Offset.
+	mov	a,#$01
+	mov	$0004,a
+; --- Set ADSR_1
+	mov	a,#$8d
+	mov	$0005,a
+; --- Set ADSR_2
+	mov	a,#$c4
+	mov	$0006,a
+; --- Set Gain Type.
+	mov	a,#$7f
+	mov	$0007,a
+; ============================ S-SCPU Wait. ===============================
+_dis08a0
+	mov	a,$00f5			; Fetch SCPUIO1
+	cmp	a,$0092			; Compare to SnesCpuPrevApuCmd.
+	beq	_dis08a0		; Continue to poll if it was the same.
+; --- Here if new ApuCmd.
+	mov	$0092,a			; Set as SnesCpuPrevApuCmd.
+	cmp	a,#$00			; Check if ApuCmd#0.
+	beq	_dis08a0		; Branch back if we passed zero.
+; --- Here if ApuCmd !=0.
+	mov	y,$00f4			; Y<-SCPUIO0
+	mov	$0091,y			; SnesCpuIOBuffer0 <- SCPUIO0
+	mov	$0090,	a		; SnesCpuIOBuffer1 <- SCPUIO1
+	mov	$00f5,a			; SCPUIO1 <- SnesCpuIObuffer1 
+;--- Check ApuCmd.
+	cmp	a,#$01			; Check if ApuCmd#1.
+	beq	_dis08fe		; Branch if 'yes'.
+	cmp	a,#$02			; Check if ApuCmd#2.
+	beq	_dis08f4		; Branch if 'yes'.
+	cmp	a,#$7f			; Check if ApuCmd#127.
+	beq	_dis0901		; Branch if 'yes'.
+	cmp	a,#$00			; Condition Status_Negative flag.
+	bmi	_dis08e1		; Branch if ApuCmd > $7f.
+; --- Fall through ApuCmd.
+	mov	a,$00f6			; Fetch low byte of addr from SCPUIO2.
+	mov	$0080,a			; Store as low word of pointer.
+	mov	a,$00f7			; Fetch high byte of addr from SCPUIO3.
+	mov	$0081,a			; Store as high word of pointer.
+	mov	x,#$00			; Init index for indirection.
+	mov	a,[$80+x]		; Fetch RAM value.
+	mov	$00f7,a			; Pass Back S-NES via SCPUIO3.
+	jmp	_dis08a0		; Jump back to 'Poll S-SCPU'.
+
+; --- Here if S-SCPU Command -ve.
+; Write Byte to S-SDSP Buffer.
+; "PAGE0[SnesCpuIOBuffer1 & 0x7f] = SnesCpuIOBuffer0;"
+_dis08e1
+	mov	a,$0090			; Fetch SnesCpuIOBuffer1.
+	and	a,#$7f			; Mask off Sign bit.
+	mov	x,a			; Pass it to X.
+	mov	y,a			; Pass it to Y.
+	mov	a,$0091			; Fetch SnesCpuIOBuffer0.
+	mov	$0000+x,a		; PAGE0[SnesCpuIOBuffer1 & 0x7f] = SnesCpuIOBuffer0;
+	call	_dis09ee		; Write Byte to S-SDSP.
+	jmp	_dis08a0		; Jump back to 'Poll S-SCPU'.
+
+; --- Here if S-SCPU Command #2.
+_dis08f4
+	mov	y,#$5c			; KOF
+	mov	a,#$7f			; voices 0~6
+	call	_dis09ee		; Write Byte to S-SDSP.
+	jmp	_dis08a0		; Jump Back to 'Poll S-SCPU'.
+
+; --- Here if S-SCPU Command #1.
+_dis08fe
+	call	_dis0980		; Copy table data.
+; ================ Refresh S-SDSP with buffer data =====================
+; --- Here if S-SCPU Command #$7f.
+_dis0901
+	mov	y,#$4c			; KON
+	mov	a,#$00			; clear voices 0~7.
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Clear settings for voices 0~7.
+	mov	y,#$5c			; KOF
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Main Volume.
+	mov	a,$000c			; Variable for Main Volume (Left).
+	mov	y,#$0c			; MVOL(L).
+	call	_dis09ee		; Write Byte to S-SDSP.
+	mov	a,$001c			; Variable for Main Volume (Right).
+	mov	y,#$1c			; MVOL(R).
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Flag Register.
+	mov	a,$006c			; Variable for Flag Register.
+	mov	y,#$6c			; FLG
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Pitch Modulation.
+	mov	a,$002d			; Variable for Pitch Modulation.
+	mov	y,#$2d			; PMON.
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Noise On/Off.
+	mov	a,$003d			; Variable for Noise On/Off.
+	mov	y,#$3d			; EVOL_R
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Echo On/Off.
+	mov	a,$004d			; Variable for Echo ON/OFF.
+	mov	y,#$4d			; EON
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Voice0 Volume.
+        mov     y,#$00			; VOL_L
+        mov     a,$0000			; Variable for Voice0 Volume Left.
+	call	_dis09ee		; Write Byte to S-SDSP.
+        inc     y			; VOL_R
+        mov     a,$0001			; Variable for Voice0 Volume Right.
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Voice0 Pitch Height
+        inc     y			; P_L
+        mov     a,$0002			; Var for Voice0 Pitch Height (low).
+	call	_dis09ee		; Write Byte to S-SDSP.
+        inc     y			; P_H
+	mov	a,$0003			; Var for Voice0 Pitch Height (high).
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Voice0 Source Number.
+	inc	y			; SCRN
+	mov	a,$0004			; Variable for Voice0 Source Number.
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Voice0 ADSR.
+	inc	y			; ADSR_1
+	mov	a,$0005
+	call	_dis09ee		; Write Byte to S-SDSP.
+	inc	y			; ADSR_2
+	mov	a,$0006
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Voice0 Gain Type.
+	inc	y			; GAIN
+	mov	a,$0007			; Variable for Gain Envelope Type.
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- Voice Enable.
+	mov	y,#$4c			; KON
+	mov	a,#$01			; Enable voice #0.
+	call	_dis09ee		; Write Byte to S-SDSP.
+; --- End of Refresh.
+	jmp	_dis08a0		; Jump back to 'Poll S-SCPU'.
+;---------------------------------------
+; Fetch Selected Table of Voice Parameters
+; and Pass to our variable table.
+_dis0980
+	mov	a,$0091			; Move this value into the accum.
+	and	a,#$07			; Mask to leave 0~7 table access.
+	asl	a			; Multiply by 8.
+	asl	a
+	asl	a
+	mov	x,a			; Use as 8-byte table index.
+;--- Pitch Height (low)
+	mov	a,$09ae+x		; Transfer these values.
+	mov	$0002,a			
+;--- Pitch Height (high)
+	mov	a,$09af+x
+	mov	$0003,a
+;--- Source Number.
+	mov	a,$09b0+x
+	mov	$0004,a
+;--- ADSR_1
+	mov	a,$09b1+x
+	mov	$0005,a
+;--- ADSR_2
+	mov	a,$09b2+x
+	mov	$0006,a
+;--- Gain Type.
+	mov	a,$09b3+x
+	mov	$0007,a
+	ret				; Return
+;---------------------------------------
+; Table of Voice Parameters (0~7)
+;               <pitch><src><adsr ><gain>
+	DB	$00,$10,$00,$CD,$CF,$00,$00,$00
+	DB	$00,$0C,$01,$AD,$8F,$00,$00,$00
+	DB	$00,$0E,$00,$88,$E0,$00,$00,$00
+	DB	$00,$10,$01,$88,$E0,$00,$00,$00
+	DB	$00,$20,$00,$CD,$D8,$00,$00,$00
+	DB	$00,$18,$00,$CD,$CF,$00,$00,$00
+	DB	$00,$0A,$01,$CD,$D8,$00,$00,$00
+	DB	$00,$14,$01,$CD,$CF,$00,$00,$00
+
+; ====== Write a byte to the S-SDSP =========
+_dis09ee
+	mov	$00f2,y
+	mov	$00f3,a
+	ret
+	ApuBlockend
+; ===========================================
+	ApuBlockStart	$8000
+; --- Source Directory.
+	DW	Src0Start			; Source#0 Start Address.
+	DW	Src0Loop			; Source#0 Loop Address.
+	DW	Src1Start			; Source#1 Start Address.
+	DW	Src1Loop			; Source#1 Loop Address.
+	ApuBlockEnd	
+;------------------------------------------------------------------
+	ApuBlockStart	$8100
+; Source#0				; Address $8100
+Src0Start
+	DB	%00000010		; Range=0,Filter=no,Loop=yes,End=no.
+	DB	$00,$00,$00,$00,$00,$00,$00,$00
+	DB	%10010110		; Range=9,Filter=1st,Loop=yes,End=no.
+	DB	$00,$00,$00,$07,$55,$54,$43,$43
+	DB	%10011110		; Range=9,Filter=3rd,Loop=yes,End=no.
+	DB	$00,$10,$00,$00,$F0,$F0,$FE,$ED
+; Source#0 Loop Address.
+Src0Loop
+	DB	%01111110		; Range=7,Filter=3rd,Loop=yes,End=no.
+	DB	$22,$0E,$DF,$E0,$0F,$E0,$F0,$12
+	DB	%10001110		; Range=8,Filter=3rd,Loop=yes,End=no.
+	DB	$10,$12,$22,$42,$20,$02,$01,$11
+	DB	%10011110		; Range=9,Filter=3rd,Loop=yes,End=no.
+	DB	$00,$01,$0F,$10,$FF,$00,$E0,$CE
+	DB	%01111111		; Range=7,Filter=3rd,Loop=yes,End=yes.
+	DB	$12,$0E,$DF,$E0,$0F,$E0,$0F,$12
+;--------------------------------------------------------------------
+; Source#1					; Address $813f
+Src1Start
+	DB	%00000010		; Range=0,Filter=no,Loop=yes,End=no.
+	DB	$00,$00,$00,$00,$00,$00,$00,$00
+	DB	%10011110		; Range=9,Filter=3rd,Loop=yes,End=no.
+	DB	$00,$00,$00,$0E,$D3,$20,$F0,$E1
+	DB	%10101110		; Range=10,Filter=3rd,Loop=yes,End=no.
+	DB	$EE,$02,$45,$0E,$E0,$F0,$F1,$01
+# Source#1 Loop Address
+Src1Loop
+	DB	%10111110		; Range=11,Filter=3rd,Loop=yes,End=no.
+	DB	$10,$01,$ED,$E1,$21,$10,$F1,$F0
+	DB	%10010110		; Range=9,Filter=1st,Loop=yes,End=no.
+	DB	$ED,$E3,$66,$FA,$CE,$12,$0F,$FF
+	DB	%10101110		; Range=10,Filter=3rd,Loop=yes,End=no.
+	DB	$EE,$03,$35,$0E,$E0,$0F,$F1,$02
+	DB	%10111111		; Range=11,Filter=3rd,Loop=yes,End=yes.
+	DB	$01,$00,$EE,$E0,$22,$01,$F0,$0F
+	ApuBlockEnd
+; ---------------------------------------
+	ApuBlockExec	ApuBiosBegin
+

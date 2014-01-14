@@ -1,0 +1,18 @@
+SNESTOOLS	:= $(SNESKIT)/tools
+SNESGRIT	:= $(SNESTOOLS)/snesgrit
+SNESCHK		:= $(SNESTOOLS)/sneschk
+SMCONV		:= $(SNESTOOLS)/smconv
+CC65		:= $(SNESKIT)/cc65/bin
+AS			:= $(CC65)/ca65
+LD			:= $(CC65)/ld65
+
+%.o : %.asm
+	@echo Assembling :: $(notdir $<)
+	@$(AS) $(ASFLAGS) $(INCLUDE) $< -o $@
+
+%.smc:
+	@echo Linking...
+	@$(LD) $(LDFLAGS) $(OFILES) -o $@ -m $(@:.smc=.map)
+	@echo ROM Checkup...
+	@$(SNESCHK) $(MAPMODE) $@
+	@echo Okay! :: $(notdir $@)

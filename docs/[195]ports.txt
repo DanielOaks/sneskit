@@ -1,0 +1,223 @@
+=============================================================================
+ Anomie's SNES Port Doc
+ $Revision: 1132 $
+ $Date: 2007-04-27 19:31:57 -0400 (Fri, 27 Apr 2007) $
+ <anomie@users.sourceforge.net>
+=============================================================================
+
+This is a document intended to describe the various hardware ports on the
+SNES. It will not describe how these ports are used by what may be plugged
+into them.
+
+In the doc below, "active", "1", "logic-1", and so forth all mean the same
+thing. Note that "1" does not necessarily correspond to either high or low
+voltage. (BTW, i could use some help here: if anyone knows whether anything
+is active-high or active-low, or what the voltages for high and low are for
+any particular port, please let me know!)
+
+
+CONTROLLER PORTS
+================
+
+The controller ports of the SNES has 7 pins, laid out something like this:
+   _________________ ____________
+  |                 |            \
+  | (1) (2) (3) (4) | (5) (6) (7) |
+  |_________________|____________/
+
+The pins are:
+ 1: +5v (power)
+ 2: Clock
+ 3: Latch
+ 4: Data1
+ 5: Data2
+ 6: IOBit
+ 7: Ground
+
+Latch is written through bit 0 of register $4016. Writing 1 to this bit
+results in Latch going to whatever state means 'latch' to a joypad.
+
+Clock of Port 1 is connected to the 'read' signal of $4016, in that reading
+$4016 causes Clock to transition. Data1 and Data2 are then read, and Clock
+transitions back (at this point, the pad is expected to stick its next bits
+of data on Data1 and Data2). Clock of Port 2 is connected to $4017.
+
+Data1 and Data2 are read through bits 0 and 1 (respectively) of $4016 and
+$4017 (for Ports 1 and 2, respectively). Thus, you must read both bits at
+once, you can't choose to read only Data1 and leave Data2 for later.
+
+IOBit is connected to the I/O Port (which is accessed through registers
+$4201 and $4213). Port 1's IOBit is connected to bit 6 of the I/O Port, and
+Port 2's IOBit is connected to bit 7. Note that, since bit 7 of the I/O Port
+is connected to the PPU Counter Latch, anything plugged into Port 2 may
+latch the H and V Counters by setting IOBit to 0.
+
+Data1 and Data2 are pulled to logic-0 within the SNES, so reads will return
+0 if nothing is plugged in.
+
+
+CART CONNECTOR
+==============
+
+The cart connector has 62 pads, laid out something like this:
+                     +--------+
+     21.477MHz Clock |  1  32 | /WRAM
+              EXPAND |  2  33 | REFRESH
+                 PA6 |  3  34 | PA7
+               /PARD |  4  35 | /PAWR
+                 GND |  5  36 | GND
+F                A11 |  6  37 | A12
+r                A10 |  7  38 | A13
+o                 A9 |  8  39 | A14
+n                 A8 |  9  40 | A15
+t                 A7 | 10  41 | A16
+                  A6 | 11  42 | A17
+o                 A5 | 12  43 | A18
+f                 A4 | 13  44 | A19
+                  A3 | 14  45 | A20
+c                 A2 | 15  46 | A21
+a                 A1 | 16  47 | A22
+r                 A0 | 17  48 | A23
+t               /IRQ | 18  49 | /CART
+                  D0 | 19  50 | D4
+                  D1 | 20  51 | D5
+                  D2 | 21  52 | D6
+                  D3 | 22  53 | D7
+                 /RD | 23  54 | /WR
+   CIC out data (p1) | 24  55 | CIC out data (p2)
+    CIC in data (p7) | 25  56 | CIC in clock (p6)
+              /RESET | 26  57 | CPU_CLOCK
+                 Vcc | 27  58 | Vcc
+                 PA0 | 28  59 | PA1
+                 PA2 | 29  60 | PA3
+                 PA4 | 30  61 | PA5
+    Left Audio Input | 31  62 | Right Audio Input
+                     +--------+
+
+A0-A23 are the Address Bus A lines, /WR and /RD are the associated read
+and write lines, and /CART and /WRAM are the two auxiliary lines.
+
+PA0-PA7 are the Address Bus B lines, with /PARD and /PAWR the associated
+read and write lines.
+
+D0-D7 are the data bus lines.
+
+REFRESH is (presumably) the RAM refresh signal sent out each scanline for 40
+master cycles.
+
+EXPAND is connected to pad 24 of the expansion port.
+
+/IRQ is connected to the CPU's /IRQ line. This can be read by the cart, or
+activated by the cart to invoke an IRQ on the CPU.
+
+/RESET is the reset signal, activated by the big reset button on the
+console. It can also be activated by hardware on the cart, if the system needs
+to be reset at a hardware level.
+
+CPU_CLOCK is (presumably) the current CPU cycle clock, which is either 6, 8,
+or 12 master cycles per cycle (3.58MHz, 2.68MHz, or 1.79MHz).
+
+The signals input on Left and Right Audio Inputs are mixed into the APU's
+output audio.
+
+The CIC pins are connected to the CIC chip, which is used for region
+lockouts. If the CIC in the console doesn't get the proper handshake over
+these pads, the reset signal is never released on the PPU2 chip, and so you
+never get anything on the display.
+
+Many carts connect only to pins 5-27 and 36-58, as the remaining pins are
+mainly useful only if the cart contains special chips.
+
+
+EXPANSION PORT
+==============
+
+The expansion port has 28 pads, laid out something like this. Note that I
+have no idea which side of this is towards the front of the SNES, nor
+whether this is the numbering looking into the console or into the cable.
+                     +--------+
+                 PA0 |  1   2 | PA1  
+                 PA2 |  3   4 | PA3
+                 PA4 |  5   6 | PA5
+                 PA6 |  7   8 | PA7
+               /PAWR |  9  10 | /PARD
+                  D0 | 11  12 | D1 
+                  D2 | 13  14 | D3 
+                  D4 | 15  16 | D5 
+                  D6 | 17  18 | D7 
+              /RESET | 19  20 | Vcc
+              SMPCLK | 21  22 | DOTCK
+                 GND | 23  24 | EXPAND
+      Mono Audio Out | 25  26 | /IRQ
+       Left Audio In | 27  28 | Right Audio In
+                     +--------+
+  
+PA0-PA7 are the Address Bus B lines, with /PARD and /PAWR the associated
+read and write lines.
+
+D0-D7 are the data bus lines.
+
+/RESET is the reset signal, activated by the big reset button on the console.
+It can also be activated by hardware on the attached device, if the system
+needs to be reset at a hardware level.
+
+EXPAND is connected to pad 2 of the cart connector.
+
+/IRQ is connected to the CPU's /IRQ line. This can be read by the attached
+device, or activated by the attached device to invoke an IRQ on the CPU.
+
+The signals input on Left and Right Audio Inputs are mixed into the APU's
+output audio. The (mono) audio output is brought back into pin 25.
+
+SMPCLK and DOTCK are not really known. SMPCLK comes from the audio subsystem,
+reports are that it's about 8.192MHz (i.e. 3 APU master clock cycles per
+cycle). DOTCK comes from PPU2, and seems to be PPU dot clock at about 5.369
+MHz (that's 21.477/4).
+
+MULTI-OUT
+=========
+
+The multi-out port has 12 pads, and looks something like this:
+  
+  --------^--------
+ /11  9  7  5  3  1\
+|                   |
+ \12 10  8  6  4  2/
+  -----------------
+
+ 1: Red analog out
+ 2: Green analog out
+ 3: Composite H/V sync out (+11V DC on PAL)
+ 4: Blue analog out
+ 5: GND
+ 6: GND
+ 7: S-VHS Y (luminance) signal
+ 8: S-VHS C (chroma) signal
+ 9: Composite video signal
+10: Vcc
+11: Mid sound (L+R)
+12: Side sound (L-R)
+
+Note: this data from http://www.thepong.com/Sites/Left/Nintendo/SNTech.htm
+
+
+RF OUT
+======
+
+I know nothing about the output of this port, except that it has a Vcc, a
+GND, a video signal, and a mono audio signal.
+
+
+POWER
+=====
+
+This one is simple. It's a hollow cylindrical plug. It expects to be
+supplied with DC 10V, 850mA, with negative in the center and positive on the
+outside.
+
+
+=============================================================================
+HISTORY:
+
+Version 1.0:
+ * Initial version.

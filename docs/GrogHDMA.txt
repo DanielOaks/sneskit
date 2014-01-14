@@ -1,0 +1,230 @@
+=============================================================================
+      Grog's Guide to DMA and HDMA on the SNES (version 1.0)
+=============================================================================
+   (C) 2001 Realtime Simulations and Roleplaying Games
+
+=============================================================================
+      Ye old Disclaimers:
+=============================================================================
+   I could be wrong, so don't trust my info blindly.  Test it yourself with
+small demos until you understand it all.
+
+   Nintendo and SNES are registered trademarks of Nintendo of America.
+   RSR and the author are not affiliated with any company mentioned in this
+   document.  Please don't sue us, we're poor.
+
+=============================================================================
+      Introduction to DMA
+=============================================================================
+   Most computer systems have some form of Direct Memory Access controller,
+which is basically a piece of hardware that allows I/O devices to copy to
+and from main memory independently of CPU control.  In the SNES, as usual,
+Nintendo came up with an odd design for their DMA system.  There are 8 DMA
+"channels", each of which can control a seperate transfer from CPU memory to
+PPU register or PPU register to CPU memory.  Using the Work RAM port in the
+PPU, it is even possible to do fast CPU memory to CPU memory copies.
+   Why use DMA?  Well, its fast.  Using DMA it only takes 8 Master Clock
+cycles per byte to copy data to PPU, whereas a LDA nnnn,X STA $21xx INX
+combo takes over 80 Master Clocks (too lazy to calc exact #) per byte.  Even
+the MVP/MVN takes 56 Master Clocks per byte for a pure memory to memory copy.
+   A DMA transfer requires setting the Source address, Destination PPU
+register, and # of bytes to copy for one of the 8 channels.  Once you've set
+these values, you start the transfer by writing a 1 to the bit in $420B that
+corresponds to the channel.  Full details of the DMA registers are at the
+end of this doc, but here's a quick example that copies tile data into VRAM
+at whatever address is currently set in $2116:
+
+   LDX #TILEOFFSET;Source Offset into source bank
+   STX $4302      ;Set Source address lower 16-bits
+   LDA #TILEBANK  ;Source bank
+   STA $4304      ;Set Source address upper 8-bits
+   LDX #TILESIZE  ;# of bytes to copy (16k)
+   STX $4305      ;Set DMA transfer size
+   LDA #$18       ;$2118 is the destination, so
+   STA $4301      ;  set lower 8-bits of destination to $18
+   LDA #$01       ;Set DMA transfer mode: auto address increment
+   STA $4300      ;  using write mode 1 (meaning write a word to $2118/$2119)
+   LDA #$01       ;The registers we've been setting are for channel 0
+   STA $420B      ;  so Start DMA transfer on channel 0 (LSB of $420B)
+
+This example illustrates the basics of a DMA transfer.  Note that only 8-bits
+of the destination can be set; thus the destination MUST be in the $2100-$21FF
+range.  In the LOADVRAM.ASM library, I use pretty much this exact code to
+quickly load tile data to VRAM.
+
+   For another quick example, here's copying from ROM to Work RAM quickly:
+
+LoadRAM .macro (SOURCEPTR, DESTPTR, SIZE)
+   LDX #(SOURCEPTR AND $FFFF)       ;Extract lower 16-bits of source ptr
+   STX $4302                        ;Set source offset
+   LDA #((SOURCEPTR >> 16) AND $FF) ;Extract upper 8-bits of source ptr
+   STA $4304                        ;Set source bank
+   LDX #SIZE                        ;
+   STX $4305                        ;Set transfer size in bytes
+   LDX #(DESTPTR AND $FFFF)         ;Extract lower 16-bits of source ptr
+   STX $2181                        ;Set WRAM offset
+   LDA #((DESTPTR >> 16) AND $FF)   ;Extract upper 8-bits of dest ptr 
+   STA $2183                        ;Set WRAM bank (only LSB is significant)
+   LDA #$80
+   STA $4301                        ;DMA destination is $2180
+   LDA #$01                         ;DMA transfer mode=auto increment
+   STA $4300                        ;  Write mode=1 byte to $2180
+   STA $420B                        ;Initiate transfer using channel 0
+   .endm
+
+
+   Both of these examples use Write Mode 1 with automatic source address
+increment.  The source address can also be decremented or stay fixed.  One
+application of the fixed source mode would be to quickly clear WRAM or VRAM.
+DMA transfers can also copy from a PPU register to CPU address space.  I
+really can't think of a reason to do so, but if it is needed just set bit 8
+of $43x0 to reverse the direction of the transfer.
+
+=============================================================================
+      HDMA Mode
+=============================================================================
+   DMA by itself is pretty useful, but Nintendo thought up another way of
+using the DMA controller that really made the SNES the great console that it
+is.  Instead of immediately halting the CPU and performing the copy, they
+created "HDMA" mode, which performs one transfer during each horizontal
+blanking period.  This allows you to do neat things like set a color every
+scanline, which is how the gradient fills in Chrono Trigger's menus are done.
+Another common application is controlling the window mask registers, allowing
+non-rectangular masks (ie the round mask transition effect in Mario World).
+There are tons of demos out there showing what HDMA can do.
+   HDMA uses the same channel registers as normal DMA, but has its own
+activation register ($420C).  There are other differences, particularly that
+the source data is stored in a specially formatted table.  Once you set the
+bit in $420C for a channel, the next HBlank interval will read the next entry
+in the HDMA table for the source data and write it to the destination register
+just like DMA.  Note that only ONE transfer can be done, either setting 1, 2
+or 4 bytes at a time, during one HBlank.  Thus HDMA is not really useful for
+mass copying of data to VRAM, but is great for special effects that only need
+up to 8 PPU registers (since there are 8 channels) to be set per scanline.
+   Another interesting thing is that the HDMA registers that track the current
+HDMA table address can be changed during a Vertical IRQ; thus some tricks can
+be played to enhance HDMA's usefulness even further.
+
+=============================================================================
+      HDMA Table Format
+=============================================================================
+   The HDMA Table has any number of "cells".  Each cell tells the HDMA logic
+what value to send to the Destination register during the next N HBlanks,
+where N is any value from 1 to 128.  If bit 8 of the N value is set, then
+the value is written EVERY HBlank; if bit 8 is zero, then the value is only
+written ONCE, the first time, and N-1 lines are skipped.  The value $80 is
+a special case; it writes EVERY HBlank for 128 lines.
+   The data to be written follows the LineCount (N) byte; the number of bytes
+of data per cell depends on the HDMA mode set in register $43x0.  There
+can be 1, 2, or 4 bytes depending on the mode.  There is also a special
+"indirect" mode, where instead of having the data in the Table directly
+there is a 16-bit offset into the indirect bank selected by $43x4.  The
+indirect mode is enabled by a bit in $43x0 as well.  (the normal mode is
+called "absolute" mode).  Here are some examples of cells for different modes:
+
+;Absolute mode 001 (1 byte), write FF to dest then skip $2F lines
+   .db $30
+   .db $FF
+
+;Absolute mode 100 (4 byte), write AABBCCDD to dest every line for $20 lines
+   .db $A0
+   .db $AA,$BB,$CC,$DD
+
+;Indirect mode 001 (2 byte), write data at IB:(TBL) to dest then skip $10
+   .db $10
+   .dw (TBL & $FFFF)   ;TBL is a label somewhere in the bank set in $43x4
+
+;End Table
+   .db $00
+
+   As the last example shows, the table must be terminated with a Cell of
+LineCount=0 (with no data).  Also note that Absolute and Indirect modes
+cannot be easily mixed (I suppose it could be done during a vertical IRQ).
+Also note that the HDMA won't quit until that 0 is recieved, so you can
+actually use one HDMA transfer over multiple frames.  Normally though, you
+will want to setup a new HDMA transfer during the NMI handler, or at least
+reset the table address manually.
+
+=============================================================================
+      DMA and HDMA Register Details
+=============================================================================
+$420B: DMA Enable Register
+            Each bit enables one DMA channel; the moment you set a bit to
+            one, the DMA transfer begins.  Up to 8 transfers can be done
+            at a time, but they do not actually occur concurrently.  The
+            first transfer is the lowest #ed enabled channel.
+            Least significant bit==Channel 0, MSB==Channel 7
+
+$420C: HDMA Enable Register
+            Each bit enables one HDMA channel; the moment you set a bit to
+            One, the HDMA transfer begins.  During each HBlank, a single
+            transfer takes place per enabled HDMA channel.  The lowest #ed
+            enabled channel goes first.
+            Least significant bit==Channel 0, MSB==Channel 7
+
+Note that the DMA and HDMA channels use the same configuration registers (as
+outlined below), ie so if 4 HDMA are active then only 4 DMA can be done, etc.
+
+There are 8 channels, so substitute the channel # (0-7) for the x in the
+register address:
+
+$43x0: AB0CDEEE    DMA Setup Register [DMAPx]
+         A -- Transfer Direction (0==CPU -> PPU, 1==PPU -> CPU)
+         B -- HDMA Addressing Mode (0==Absolute, 1==Indirect)
+         C -- CPU addr Auto inc/dec selection (0==Increment, 1==Decrement)
+         D -- CPU addr Auto inc/dec enable (0==Enable, 1==Disable (fixed))
+         E -- DMA Transfer Word Select
+            For DMA: (B0-B3 are the source data bytes, $21XX is PPU destination)
+               000 == Write 1 byte, B0->$21xx
+               001 == Write 2 bytes, B0->$21xx B1->$21XX+1
+               010 == Identical to 000
+               011 == Write 4 bytes, B0->$21XX B1->$21XX B2->$21XX+1 B3->$21XX+1
+               100 == Write 4 bytes, B0->$21XX B1->$21XX+1 B2->$21XX+2 B3->$21XX+3
+
+            For HDMA: (B0-B3 are the source data bytes, $21XX is PPU destination)
+               000 == Write 1 byte, B0->$21xx
+               001 == Write 2 bytes, B0->$21XX, B1->$21XX+1
+               010 == Write 2 bytes, B0->$21XX, B1->$21XX
+               011 == Write 4 bytes, B0->$21XX, B1->$21XX B2->$21XX+1 B3->$21XX+1
+               100 == Write 4 bytes, B0->$21XX, B1->$21XX+1, B2->$21XX+2, B3->$21XX+3
+
+$43x1: nnnnnnnn    PPU register selection [BBADx]
+         The byte written here is ORed with $2100 to form the source or
+         destination (depending on bit 7 of $43x0) address for the DMA
+         transfer.  This is the "$21XX" in the description of the DMA
+         Transfer Word Select for $43x0.
+
+$43x2, $43x3, $43x4:  CPU memory area address
+            For DMA:
+               The 24-bit address points to the source or destination
+               CPU memory address for the DMA transfer.  Whether this is
+               the source or destination depends on bit 7 of $43x0.
+            For HDMA:
+               The 24-bit address points to the HDMA table in the CPU's
+               memory space.  The table format is outlined elsewhere in this
+               document.
+
+$43x5, $43x6, $43x7: Transfer Size or Indirect Address
+            For DMA:
+               16-bit value tells how many bytes to transfer; if zero,
+               wraps around to 65536 bytes.  Take care that this value
+               is evenly divisible by the number of bytes in a single
+               transfer; ie 13 bytes in DMA mode 4 is a BAD idea.
+            For HDMA:
+               Not usually read or written to directly.  Holds the
+               final address of the HDMA transfer on completion.
+
+$43x8, $43x9:  CPU Address
+               At the beginning of a transfer, this is automatically set to
+               the value of $43x2.  It is used as the "active" address during
+               the transfer.  Rarely need to access this directly, but you
+               can if you want to "reset" the transfer or something.
+
+$43xA:  Number of lines to transfer
+            HDMA only:
+               No need to set this directly; stores the # of lines during
+               HDMA transfer, corresponding to the current entry in the
+               HDMA table being processed.
+
+
+
